@@ -1,0 +1,16 @@
+# Source files (dist is published)
+src/
+tsconfig.json
+tsup.config.ts
+
+# Dev files
+.github/
+.gitignore
+*.test.ts
+coverage/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

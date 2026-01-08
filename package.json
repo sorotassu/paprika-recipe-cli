@@ -1,0 +1,56 @@
+{
+  "name": "paprika-recipe-cli",
+  "version": "0.1.0",
+  "description": "Unofficial CLI for Paprika Recipe Manager",
+  "author": "Matt Russell <matthewjosephrussell@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mjrussell/paprika-recipe-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/mjrussell/paprika-recipe-cli/issues"
+  },
+  "homepage": "https://github.com/mjrussell/paprika-recipe-cli#readme",
+  "keywords": [
+    "paprika",
+    "recipe",
+    "cli",
+    "cooking",
+    "meal-planning",
+    "grocery",
+    "unofficial"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "paprika": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.0"
+  }
+}

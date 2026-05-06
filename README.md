@@ -99,9 +99,20 @@ paprika restore-recipe "Pasta Carbonara" --dry-run
 ### Meal Planning
 
 ```bash
-paprika meals                   # Show all planned meals
+paprika meals                   # Show all planned meals (includes meal UIDs)
 paprika meals --date 2026-01-08 # Filter by date
 paprika meals --json
+
+paprika add-meal 2026-01-08 dinner "Leftovers"
+paprika add-meal 2026-01-08 dinner --recipe "Pasta Carbonara"
+paprika add-meal 2026-01-08 2 --recipe <recipe-uid> --dry-run
+
+paprika update-meal <meal-uid> --type lunch --date 2026-01-09
+paprika update-meal <meal-uid> --recipe "Soup"
+paprika update-meal <meal-uid> --name "Takeout"
+
+paprika remove-meal <meal-uid>
+paprika remove-meal <meal-uid> --dry-run
 
 paprika menus                   # List menus
 paprika menus --json
@@ -209,7 +220,7 @@ paprika meals --date $(date +%Y-%m-%d)
 This package also exports a TypeScript client for programmatic use:
 
 ```typescript
-import { PaprikaClient } from 'paprika-recipe-cli';
+import { generateSyncHash, PaprikaClient } from 'paprika-recipe-cli';
 
 const client = new PaprikaClient({
   email: process.env.PAPRIKA_EMAIL,
@@ -219,11 +230,24 @@ const client = new PaprikaClient({
 const status = await client.getStatus();
 const bookmarks = await client.getBookmarks();
 const recipes = await client.getAllRecipes();
+const mealTypes = await client.getMealTypes();
 const meals = await client.getMeals();
 const menus = await client.getMenus();
 const menuItems = await client.getMenuItems();
 const groceries = await client.getGroceries();
 const pantry = await client.getPantry();
+await client.saveMeals([
+  {
+    uid: "22222222-2222-2222-2222-222222222222",
+    recipe_uid: null,
+    name: "Example Dinner",
+    date: "2026-01-08 00:00:00",
+    type: 2,
+    order_flag: 0,
+    hash: generateSyncHash(),
+    deleted: false,
+  },
+]);
 const saved = await client.saveRecipe({
   uid: "11111111-1111-1111-1111-111111111111",
   name: "Example Recipe",

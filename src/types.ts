@@ -78,9 +78,33 @@ export interface Meal {
   uid: string;
   recipe_uid: string | null;
   name: string;
-  date: string; // YYYY-MM-DD
+  date: string;
   type: number; // 0=breakfast, 1=lunch, 2=dinner, 3=snack
   order_flag: number;
+  type_uid?: string | null;
+  scale?: string | null;
+  is_ingredient?: boolean;
+}
+
+export interface MealType {
+  uid: string;
+  name: string;
+  order_flag: number;
+  color: string;
+  export_all_day: boolean;
+  export_time: number;
+  original_type: number;
+}
+
+export interface MealWritePayload {
+  uid: string;
+  recipe_uid: string | null;
+  name: string;
+  date: string;
+  type: number;
+  order_flag: number;
+  hash: string;
+  deleted: boolean;
 }
 
 export interface GroceryItem {

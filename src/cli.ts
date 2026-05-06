@@ -8,7 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { createInterface } from "node:readline";
-import { PaprikaClient } from "./api.js";
+import { generateSyncHash, PaprikaClient } from "./api.js";
 import {
   loadConfig,
   loadConfigFromEnv,
@@ -21,6 +21,8 @@ import type {
   Bookmark,
   Category,
   Meal,
+  MealType,
+  MealWritePayload,
   Menu,
   MenuItem,
   PantryItem,
@@ -523,6 +525,107 @@ function readSingleImportedRecipe(path: string): ImportedRecipeInput {
   }
 
   return parsed;
+}
+
+function normalizeMealDate(input: string): string {
+  const value = input.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return `${value} 00:00:00`;
+  }
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return value;
+  }
+  throw new Error(`Invalid date: ${input}. Use YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.`);
+}
+
+function getMealDateKey(date: string): string {
+  return date.slice(0, 10);
+}
+
+async function resolveMealType(
+  client: PaprikaClient,
+  identifier: string
+): Promise<MealType> {
+  const mealTypes = await client.getMealTypes();
+  const trimmed = identifier.trim();
+  const numeric = Number(trimmed);
+
+  if (Number.isInteger(numeric) && numeric >= 0) {
+    const byOriginalType = mealTypes.find((mealType) => mealType.original_type === numeric);
+    if (byOriginalType) {
+      return byOriginalType;
+    }
+  }
+
+  const normalized = trimmed.toLowerCase();
+  const aliasMap = new Map<string, number>([
+    ["breakfast", 0],
+    ["breakfasts", 0],
+    ["lunch", 1],
+    ["lunches", 1],
+    ["dinner", 2],
+    ["dinners", 2],
+    ["snack", 3],
+    ["snacks", 3],
+  ]);
+  const aliasedType = aliasMap.get(normalized);
+  if (aliasedType !== undefined) {
+    const aliased = mealTypes.find((mealType) => mealType.original_type === aliasedType);
+    if (aliased) {
+      return aliased;
+    }
+  }
+
+  const exact = mealTypes.find((mealType) => mealType.name.trim().toLowerCase() === normalized);
+  if (exact) {
+    return exact;
+  }
+
+  const partialMatches = mealTypes.filter((mealType) =>
+    mealType.name.trim().toLowerCase().includes(normalized)
+  );
+  if (partialMatches.length > 1) {
+    const names = partialMatches.map((mealType) => mealType.name).join(", ");
+    throw new Error(`Multiple meal types matched "${identifier}": ${names}`);
+  }
+  if (partialMatches.length === 1) {
+    return partialMatches[0]!;
+  }
+
+  throw new Error(`Unknown meal type: ${identifier}`);
+}
+
+function toMealWritePayload(meal: Meal, overrides: Partial<MealWritePayload> = {}): MealWritePayload {
+  return {
+    uid: meal.uid,
+    recipe_uid: meal.recipe_uid,
+    name: meal.name,
+    date: meal.date,
+    type: meal.type,
+    order_flag: meal.order_flag,
+    hash: generateSyncHash(),
+    deleted: false,
+    ...overrides,
+  };
+}
+
+function findMealByUid(meals: Meal[], uid: string): Meal | null {
+  const normalized = uid.trim().toUpperCase();
+  return meals.find((meal) => meal.uid.toUpperCase() === normalized) ?? null;
+}
+
+function getNextMealOrderFlag(
+  meals: Meal[],
+  date: string,
+  type: number,
+  skipUid?: string
+): number {
+  return meals.filter(
+    (meal) =>
+      meal.uid !== skipUid &&
+      meal.date === date &&
+      meal.type === type
+  ).length;
 }
 
 program
@@ -1035,9 +1138,10 @@ program
 
     try {
       let meals = await client.getMeals();
+      const mealTypes = await client.getMealTypes();
 
       if (options.date) {
-        meals = meals.filter((m) => m.date === options.date);
+        meals = meals.filter((meal) => getMealDateKey(meal.date) === options.date);
       }
 
       if (options.json) {
@@ -1045,23 +1149,244 @@ program
       } else if (meals.length === 0) {
         console.log("No meals planned.");
       } else {
-        // Group by date
-        const byDate = new Map<string, Meal[]>();
-        for (const meal of meals) {
-          const existing = byDate.get(meal.date) ?? [];
-          existing.push(meal);
-          byDate.set(meal.date, existing);
+        const mealTypeNames = new Map<string, string>();
+        for (const mealType of mealTypes) {
+          mealTypeNames.set(`uid:${mealType.uid}`, mealType.name);
+          mealTypeNames.set(`type:${mealType.original_type}`, mealType.name);
         }
 
-        const mealTypes = ["Breakfast", "Lunch", "Dinner", "Snack"];
+        const byDate = new Map<string, Meal[]>();
+        for (const meal of meals) {
+          const dateKey = getMealDateKey(meal.date);
+          const existing = byDate.get(dateKey) ?? [];
+          existing.push(meal);
+          byDate.set(dateKey, existing);
+        }
 
         for (const [date, dateMeals] of [...byDate.entries()].sort()) {
           console.log(`\n${style.bold(date)}:`);
-          for (const meal of dateMeals.sort((a, b) => a.type - b.type)) {
-            const type = mealTypes[meal.type] ?? "Other";
-            console.log(`  ${style.dim(type + ":")} ${meal.name}`);
+          for (const meal of dateMeals.sort((a, b) => a.type - b.type || a.order_flag - b.order_flag)) {
+            const type =
+              (meal.type_uid ? mealTypeNames.get(`uid:${meal.type_uid}`) : undefined) ??
+              mealTypeNames.get(`type:${meal.type}`) ??
+              "Other";
+            console.log(
+              `  ${style.dim(type + ":")} ${meal.name} ${style.dim("[" + meal.uid + "]")}`
+            );
           }
         }
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("add-meal")
+  .description("Add a meal plan entry")
+  .argument("<date>", "Meal date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)")
+  .argument("<mealType>", "Meal type name or number")
+  .argument("[name]", "Meal name when not linking directly to a recipe")
+  .option("--recipe <identifier>", "Recipe UID or name to link")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      date: string,
+      mealType: string,
+      name: string | undefined,
+      options: { recipe?: string; json?: boolean; dryRun?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const normalizedDate = normalizeMealDate(date);
+        const resolvedMealType = await resolveMealType(client, mealType);
+        const meals = await client.getMeals();
+        const recipe = options.recipe
+          ? await resolveRecipeIdentifier(client, options.recipe)
+          : null;
+
+        if (options.recipe && !recipe) {
+          throw new Error(`Recipe not found: ${options.recipe}`);
+        }
+
+        const mealName = name?.trim() || recipe?.name;
+        if (!mealName) {
+          throw new Error("Meal name is required unless --recipe resolves to an existing recipe.");
+        }
+
+        const orderFlag = getNextMealOrderFlag(
+          meals,
+          normalizedDate,
+          resolvedMealType.original_type
+        );
+
+        const payload: MealWritePayload = {
+          uid: randomUUID().toUpperCase(),
+          recipe_uid: recipe?.uid ?? null,
+          name: mealName,
+          date: normalizedDate,
+          type: resolvedMealType.original_type,
+          order_flag: orderFlag,
+          hash: generateSyncHash(),
+          deleted: false,
+        };
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would add meal: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveMeals([payload]);
+        const createdMeal = findMealByUid(await client.getMeals(), payload.uid);
+        if (!createdMeal) {
+          throw new Error("Meal was created but could not be reloaded from Paprika.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(createdMeal, null, 2));
+        } else {
+          console.log(`Added meal: ${style.bold(createdMeal.name)} ${style.dim("[" + createdMeal.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("update-meal")
+  .description("Update an existing meal plan entry")
+  .argument("<uid>", "Meal UID")
+  .option("--date <date>", "New date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)")
+  .option("--type <mealType>", "New meal type name or number")
+  .option("--name <name>", "New meal name")
+  .option("--recipe <identifier>", "Recipe UID or name to link")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      uid: string,
+      options: {
+        date?: string;
+        type?: string;
+        name?: string;
+        recipe?: string;
+        json?: boolean;
+        dryRun?: boolean;
+      }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const meals = await client.getMeals();
+        const existingMeal = findMealByUid(meals, uid);
+        if (!existingMeal) {
+          throw new Error(`Meal not found: ${uid}`);
+        }
+        if (!options.date && !options.type && !options.name && !options.recipe) {
+          throw new Error("Provide at least one of --date, --type, --name, or --recipe.");
+        }
+
+        const resolvedMealType = options.type
+          ? await resolveMealType(client, options.type)
+          : null;
+        const recipe = options.recipe
+          ? await resolveRecipeIdentifier(client, options.recipe)
+          : null;
+        if (options.recipe && !recipe) {
+          throw new Error(`Recipe not found: ${options.recipe}`);
+        }
+
+        const nextDate = options.date ? normalizeMealDate(options.date) : existingMeal.date;
+        const nextType = resolvedMealType?.original_type ?? existingMeal.type;
+        const typeOrDateChanged =
+          nextDate !== existingMeal.date || nextType !== existingMeal.type;
+
+        const payload = toMealWritePayload(existingMeal, {
+          date: nextDate,
+          type: nextType,
+          name: options.name?.trim() || recipe?.name || existingMeal.name,
+          recipe_uid: options.recipe ? (recipe?.uid ?? null) : existingMeal.recipe_uid,
+          order_flag: typeOrDateChanged
+            ? getNextMealOrderFlag(meals, nextDate, nextType, existingMeal.uid)
+            : existingMeal.order_flag,
+        });
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would update meal: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveMeals([payload]);
+        const updatedMeal = findMealByUid(await client.getMeals(), payload.uid);
+        if (!updatedMeal) {
+          throw new Error("Meal was updated but could not be reloaded from Paprika.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(updatedMeal, null, 2));
+        } else {
+          console.log(`Updated meal: ${style.bold(updatedMeal.name)} ${style.dim("[" + updatedMeal.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("remove-meal")
+  .description("Remove a meal plan entry")
+  .argument("<uid>", "Meal UID")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(async (uid: string, options: { json?: boolean; dryRun?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const meals = await client.getMeals();
+      const existingMeal = findMealByUid(meals, uid);
+      if (!existingMeal) {
+        throw new Error(`Meal not found: ${uid}`);
+      }
+
+      const payload = toMealWritePayload(existingMeal, { deleted: true });
+
+      if (options.dryRun) {
+        if (options.json) {
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          console.log(`Would remove meal: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+        }
+        return;
+      }
+
+      await client.saveMeals([payload]);
+      const deletedMeal = findMealByUid(await client.getMeals(), payload.uid);
+      if (deletedMeal) {
+        throw new Error("Meal still exists after delete request.");
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ removed: true, uid: payload.uid, name: payload.name }, null, 2));
+      } else {
+        console.log(`Removed meal: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
       }
     } catch (error) {
       printError(error instanceof Error ? error.message : String(error));

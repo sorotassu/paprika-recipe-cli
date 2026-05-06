@@ -4,12 +4,15 @@
  * REST client for Paprika Recipe Manager cloud sync API.
  */
 
+import { createHash, randomUUID } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type {
   PaprikaConfig,
   Recipe,
   RecipeStub,
   Meal,
+  MealType,
+  MealWritePayload,
   GroceryItem,
   Category,
   Bookmark,
@@ -195,10 +198,36 @@ export class PaprikaClient {
   }
 
   /**
+   * Get all meal types
+   */
+  async getMealTypes(): Promise<MealType[]> {
+    return this.request<MealType[]>("/sync/mealtypes/");
+  }
+
+  /**
    * Get all meals
    */
   async getMeals(): Promise<Meal[]> {
     return this.request<Meal[]>("/sync/meals/");
+  }
+
+  /**
+   * Create, update, or delete meal entries
+   */
+  async saveMeals(meals: MealWritePayload[]): Promise<void> {
+    const form = new FormData();
+    form.append(
+      "data",
+      new Blob([gzipSync(Buffer.from(JSON.stringify(meals), "utf-8"))], {
+        type: "application/octet-stream",
+      }),
+      "meals.gz"
+    );
+
+    await this.request<true>("/sync/meals/", {
+      method: "POST",
+      body: form,
+    });
   }
 
   /**
@@ -287,4 +316,11 @@ export class PaprikaClient {
     );
     return partial ?? null;
   }
+}
+
+export function generateSyncHash(): string {
+  return createHash("sha256")
+    .update(randomUUID().toUpperCase())
+    .digest("hex")
+    .toUpperCase();
 }

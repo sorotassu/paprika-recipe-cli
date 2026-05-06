@@ -178,6 +178,15 @@ export interface Bookmark {
   order_flag: number;
 }
 
+export interface BookmarkWritePayload {
+  uid: string;
+  title: string;
+  url: string;
+  order_flag: number;
+  hash: string;
+  deleted: boolean;
+}
+
 export interface PantryItem {
   uid: string;
   ingredient: string;

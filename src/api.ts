@@ -20,6 +20,7 @@ import type {
   Category,
   CategoryWritePayload,
   Bookmark,
+  BookmarkWritePayload,
   PantryItem,
   Menu,
   MenuItem,
@@ -199,6 +200,25 @@ export class PaprikaClient {
    */
   async getBookmarks(): Promise<Bookmark[]> {
     return this.request<Bookmark[]>("/sync/bookmarks/");
+  }
+
+  /**
+   * Create, update, or delete bookmark entries
+   */
+  async saveBookmarks(bookmarks: BookmarkWritePayload[]): Promise<void> {
+    const form = new FormData();
+    form.append(
+      "data",
+      new Blob([gzipSync(Buffer.from(JSON.stringify(bookmarks), "utf-8"))], {
+        type: "application/octet-stream",
+      }),
+      "bookmarks.gz"
+    );
+
+    await this.request<true>("/sync/bookmarks/", {
+      method: "POST",
+      body: form,
+    });
   }
 
   /**

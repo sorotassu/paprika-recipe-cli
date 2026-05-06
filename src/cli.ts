@@ -19,6 +19,7 @@ import {
 } from "./config.js";
 import type {
   Bookmark,
+  BookmarkWritePayload,
   Category,
   CategoryWritePayload,
   GroceryAisle,
@@ -243,7 +244,7 @@ program
         for (const bookmark of bookmarks.sort((a, b) =>
           a.title.localeCompare(b.title)
         )) {
-          console.log(`• ${style.bold(bookmark.title)}`);
+          console.log(`• ${style.bold(bookmark.title)} ${style.dim("[" + bookmark.uid + "]")}`);
           console.log(`  ${style.dim(bookmark.url)}`);
         }
       }
@@ -252,6 +253,170 @@ program
       process.exit(ExitCode.Failure);
     }
   });
+
+program
+  .command("add-bookmark")
+  .description("Add a Paprika bookmark")
+  .argument("<title>", "Bookmark title")
+  .argument("<url>", "Bookmark URL")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (title: string, url: string, options: { json?: boolean; dryRun?: boolean }) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const bookmarks = await client.getBookmarks();
+        const payload: BookmarkWritePayload = {
+          uid: randomUUID().toUpperCase(),
+          title: title.trim(),
+          url: url.trim(),
+          order_flag: getNextBookmarkOrderFlag(bookmarks),
+          hash: generateSyncHash(),
+          deleted: false,
+        };
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would add bookmark: ${style.bold(payload.title)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveBookmarks([payload]);
+        const createdBookmark = resolveBookmarkIdentifier(
+          await client.getBookmarks(),
+          payload.uid
+        );
+        if (!createdBookmark) {
+          throw new Error("Bookmark was created but could not be reloaded from Paprika.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(createdBookmark, null, 2));
+        } else {
+          console.log(`Added bookmark: ${style.bold(createdBookmark.title)} ${style.dim("[" + createdBookmark.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("update-bookmark")
+  .description("Update an existing Paprika bookmark")
+  .argument("<identifier>", "Bookmark UID or title")
+  .option("--title <title>", "New bookmark title")
+  .option("--url <url>", "New bookmark URL")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      identifier: string,
+      options: { title?: string; url?: string; json?: boolean; dryRun?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const bookmarks = await client.getBookmarks();
+        const existingBookmark = resolveBookmarkIdentifier(bookmarks, identifier);
+        if (!existingBookmark) {
+          throw new Error(`Bookmark not found: ${identifier}`);
+        }
+        if (!options.title && !options.url) {
+          throw new Error("Provide at least one of --title or --url.");
+        }
+
+        const payload = toBookmarkWritePayload(existingBookmark, {
+          title: options.title?.trim() || existingBookmark.title,
+          url: options.url?.trim() || existingBookmark.url,
+        });
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would update bookmark: ${style.bold(payload.title)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveBookmarks([payload]);
+        const updatedBookmark = resolveBookmarkIdentifier(
+          await client.getBookmarks(),
+          payload.uid
+        );
+        if (!updatedBookmark) {
+          throw new Error("Bookmark was updated but could not be reloaded from Paprika.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(updatedBookmark, null, 2));
+        } else {
+          console.log(`Updated bookmark: ${style.bold(updatedBookmark.title)} ${style.dim("[" + updatedBookmark.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("remove-bookmark")
+  .description("Delete a Paprika bookmark")
+  .argument("<identifier>", "Bookmark UID or title")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (identifier: string, options: { json?: boolean; dryRun?: boolean }) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const bookmarks = await client.getBookmarks();
+        const existingBookmark = resolveBookmarkIdentifier(bookmarks, identifier);
+        if (!existingBookmark) {
+          throw new Error(`Bookmark not found: ${identifier}`);
+        }
+
+        const payload = toBookmarkWritePayload(existingBookmark, { deleted: true });
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would delete bookmark: ${style.bold(payload.title)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveBookmarks([payload]);
+        const deletedBookmark = resolveBookmarkIdentifier(
+          await client.getBookmarks(),
+          payload.uid
+        );
+        if (deletedBookmark) {
+          throw new Error("Bookmark still exists after delete request.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify({ removed: true, uid: payload.uid, title: payload.title }, null, 2));
+        } else {
+          console.log(`Deleted bookmark: ${style.bold(payload.title)} ${style.dim("[" + payload.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
 
 // ============================================
 // Recipe Commands
@@ -417,6 +582,62 @@ function normalizeOptionalParentFlag(value?: string): string | undefined {
     return "";
   }
   return trimmed;
+}
+
+function resolveBookmarkIdentifier(
+  bookmarks: Bookmark[],
+  identifier: string
+): Bookmark | null {
+  const trimmed = identifier.trim();
+  const normalizedUid = trimmed.toUpperCase();
+  const byUid = bookmarks.find((bookmark) => bookmark.uid.toUpperCase() === normalizedUid);
+  if (byUid) {
+    return byUid;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  const exact = bookmarks.find(
+    (bookmark) => bookmark.title.trim().toLowerCase() === normalized
+  );
+  if (exact) {
+    return exact;
+  }
+
+  const partialMatches = bookmarks.filter((bookmark) =>
+    bookmark.title.trim().toLowerCase().includes(normalized)
+  );
+  if (partialMatches.length > 1) {
+    const titles = partialMatches.map((bookmark) => bookmark.title).join(", ");
+    throw new Error(
+      `Multiple bookmarks matched "${identifier}": ${titles}. Use a more specific title or the bookmark UID.`
+    );
+  }
+
+  return partialMatches[0] ?? null;
+}
+
+function getNextBookmarkOrderFlag(
+  bookmarks: Bookmark[],
+  skipUid?: string
+): number {
+  return bookmarks
+    .filter((bookmark) => bookmark.uid !== skipUid)
+    .reduce((max, bookmark) => Math.max(max, bookmark.order_flag), -1) + 1;
+}
+
+function toBookmarkWritePayload(
+  bookmark: Bookmark,
+  overrides: Partial<BookmarkWritePayload> = {}
+): BookmarkWritePayload {
+  return {
+    uid: bookmark.uid,
+    title: bookmark.title,
+    url: bookmark.url,
+    order_flag: bookmark.order_flag,
+    hash: generateSyncHash(),
+    deleted: false,
+    ...overrides,
+  };
 }
 
 function normalizeImportedRecipe(

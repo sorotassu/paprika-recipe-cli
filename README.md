@@ -59,8 +59,17 @@ paprika whoami            # Show current user
 paprika status           # Show sync object counts
 paprika status --json
 
-paprika bookmarks        # List saved bookmarks
+paprika bookmarks        # List saved bookmarks (includes UIDs)
 paprika bookmarks --json
+
+paprika add-bookmark "Paprika Docs" https://paprikaapp.com/
+paprika add-bookmark "Example" https://example.com/ --dry-run --json
+
+paprika update-bookmark "Paprika Docs" --title "Paprika Homepage"
+paprika update-bookmark <bookmark-uid> --url https://www.paprikaapp.com/
+
+paprika remove-bookmark "Paprika Homepage"
+paprika remove-bookmark <bookmark-uid> --dry-run
 ```
 
 ### Recipes
@@ -263,6 +272,16 @@ const groceryAisles = await client.getGroceryAisles();
 const groceries = await client.getGroceries();
 const categories = await client.getCategories();
 const pantry = await client.getPantry();
+await client.saveBookmarks([
+  {
+    uid: "11111111-1111-1111-1111-111111111111",
+    title: "Paprika",
+    url: "https://paprikaapp.com/",
+    order_flag: bookmarks.length,
+    hash: generateSyncHash(),
+    deleted: false,
+  },
+]);
 await client.saveMeals([
   {
     uid: "22222222-2222-2222-2222-222222222222",

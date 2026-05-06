@@ -4,7 +4,7 @@
  * REST client for Paprika Recipe Manager cloud sync API.
  */
 
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import type {
   PaprikaConfig,
   Recipe,
@@ -13,6 +13,7 @@ import type {
   GroceryItem,
   Category,
   ApiResponse,
+  RecipeWritePayload,
 } from "./types.js";
 
 const BASE_URL = "https://www.paprikaapp.com/api/v2";
@@ -193,6 +194,27 @@ export class PaprikaClient {
    */
   async getCategories(): Promise<Category[]> {
     return this.request<Category[]>("/sync/categories/");
+  }
+
+  /**
+   * Create or update a recipe by UID
+   */
+  async saveRecipe(recipe: RecipeWritePayload): Promise<Recipe> {
+    const form = new FormData();
+    form.append(
+      "data",
+      new Blob([gzipSync(Buffer.from(JSON.stringify(recipe), "utf-8"))], {
+        type: "application/octet-stream",
+      }),
+      "recipe.gz"
+    );
+
+    await this.request<true>(`/sync/recipe/${recipe.uid}/`, {
+      method: "POST",
+      body: form,
+    });
+
+    return this.getRecipe(recipe.uid);
   }
 
   /**

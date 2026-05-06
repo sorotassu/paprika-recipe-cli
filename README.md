@@ -32,6 +32,10 @@ paprika search "chicken"
 # View a recipe
 paprika recipe "Pasta Carbonara"
 
+# Import a recipe from JSON
+paprika import-recipe ./recipe.json --dry-run
+paprika import-recipe ./recipe.json
+
 # Check your grocery list
 paprika groceries
 ```
@@ -60,6 +64,11 @@ paprika recipe "Pasta" --json
 
 paprika search "chicken"               # Search recipes
 paprika search "quick dinner" --json
+
+paprika import-recipe ./recipe.json                # Create from JSON
+paprika import-recipe ./recipe.json --dry-run      # Validate only
+paprika import-recipe ./recipe.json --update-existing
+paprika import-recipe ./recipe.json --allow-duplicate
 ```
 
 ### Meal Planning
@@ -123,6 +132,15 @@ For non-interactive use (scripts, CI/CD), set both `PAPRIKA_EMAIL` and `PAPRIKA_
 paprika recipes --json > my-recipes.json
 ```
 
+### Import a recipe from JSON
+
+```bash
+paprika import-recipe ./recipe.json --dry-run
+paprika import-recipe ./recipe.json
+```
+
+Recipe imports accept a single recipe object or an array of recipe objects. Category values may be existing Paprika category names or UUIDs.
+
 ### Get ingredients for a recipe
 
 ```bash
@@ -159,6 +177,35 @@ const client = new PaprikaClient({
 const recipes = await client.getAllRecipes();
 const meals = await client.getMeals();
 const groceries = await client.getGroceries();
+const saved = await client.saveRecipe({
+  uid: "11111111-1111-1111-1111-111111111111",
+  name: "Example Recipe",
+  description: "",
+  ingredients: "1 cup broth",
+  directions: "Heat and serve.",
+  notes: "",
+  nutritional_info: "",
+  servings: "1",
+  difficulty: "Easy",
+  prep_time: "",
+  cook_time: "",
+  total_time: "",
+  source: "",
+  source_url: "",
+  image_url: null,
+  photo: "",
+  photo_hash: "",
+  photo_large: null,
+  scale: null,
+  hash: "",
+  categories: [],
+  rating: 0,
+  in_trash: false,
+  is_pinned: false,
+  on_favorites: false,
+  created: "2026-01-01 00:00:00",
+  deleted: false,
+});
 ```
 
 ## Development

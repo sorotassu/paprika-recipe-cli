@@ -44,6 +44,36 @@ export interface Recipe {
   photo_url: string | null;
 }
 
+export interface RecipeWritePayload {
+  uid: string;
+  name: string;
+  ingredients: string;
+  directions: string;
+  description: string;
+  notes: string;
+  nutritional_info: string;
+  servings: string;
+  difficulty: string;
+  prep_time: string;
+  cook_time: string;
+  total_time: string;
+  source: string;
+  source_url: string;
+  image_url: string | null;
+  photo: string;
+  photo_hash: string;
+  photo_large: string | null;
+  scale: string | null;
+  hash: string;
+  categories: string[];
+  rating: number;
+  in_trash: boolean;
+  is_pinned: boolean;
+  on_favorites: boolean;
+  created: string;
+  deleted: boolean;
+}
+
 export interface Meal {
   uid: string;
   recipe_uid: string | null;

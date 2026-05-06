@@ -4,7 +4,6 @@
  * REST client for Paprika Recipe Manager cloud sync API.
  */
 
-import { createHash, randomUUID } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type {
   PaprikaConfig,
@@ -196,6 +195,28 @@ export class PaprikaClient {
   }
 
   /**
+   * Create, update, or delete multiple entities of the same type
+   */
+  private async saveEntities<
+    T extends { uid: string; hash: string; deleted: boolean }
+  >(endpoint: string, items: T[]): Promise<void> {
+    const form = new FormData();
+    const filename = `${endpoint.slice(1, -1)}.gz`;
+    form.append(
+      "data",
+      new Blob([gzipSync(Buffer.from(JSON.stringify(items), "utf-8"))], {
+        type: "application/octet-stream",
+      }),
+      filename
+    );
+
+    await this.request<true>(endpoint, {
+      method: "POST",
+      body: form,
+    });
+  }
+
+  /**
    * Get all bookmarks
    */
   async getBookmarks(): Promise<Bookmark[]> {
@@ -206,19 +227,7 @@ export class PaprikaClient {
    * Create, update, or delete bookmark entries
    */
   async saveBookmarks(bookmarks: BookmarkWritePayload[]): Promise<void> {
-    const form = new FormData();
-    form.append(
-      "data",
-      new Blob([gzipSync(Buffer.from(JSON.stringify(bookmarks), "utf-8"))], {
-        type: "application/octet-stream",
-      }),
-      "bookmarks.gz"
-    );
-
-    await this.request<true>("/sync/bookmarks/", {
-      method: "POST",
-      body: form,
-    });
+    return this.saveEntities("/sync/bookmarks/", bookmarks);
   }
 
   /**
@@ -239,19 +248,7 @@ export class PaprikaClient {
    * Create, update, or delete meal entries
    */
   async saveMeals(meals: MealWritePayload[]): Promise<void> {
-    const form = new FormData();
-    form.append(
-      "data",
-      new Blob([gzipSync(Buffer.from(JSON.stringify(meals), "utf-8"))], {
-        type: "application/octet-stream",
-      }),
-      "meals.gz"
-    );
-
-    await this.request<true>("/sync/meals/", {
-      method: "POST",
-      body: form,
-    });
+    return this.saveEntities("/sync/meals/", meals);
   }
 
   /**
@@ -279,19 +276,7 @@ export class PaprikaClient {
    * Create, update, or delete grocery entries
    */
   async saveGroceries(items: GroceryWritePayload[]): Promise<void> {
-    const form = new FormData();
-    form.append(
-      "data",
-      new Blob([gzipSync(Buffer.from(JSON.stringify(items), "utf-8"))], {
-        type: "application/octet-stream",
-      }),
-      "groceries.gz"
-    );
-
-    await this.request<true>("/sync/groceries/", {
-      method: "POST",
-      body: form,
-    });
+    return this.saveEntities("/sync/groceries/", items);
   }
 
   /**
@@ -312,19 +297,7 @@ export class PaprikaClient {
    * Create, update, or delete category entries
    */
   async saveCategories(categories: CategoryWritePayload[]): Promise<void> {
-    const form = new FormData();
-    form.append(
-      "data",
-      new Blob([gzipSync(Buffer.from(JSON.stringify(categories), "utf-8"))], {
-        type: "application/octet-stream",
-      }),
-      "categories.gz"
-    );
-
-    await this.request<true>("/sync/categories/", {
-      method: "POST",
-      body: form,
-    });
+    return this.saveEntities("/sync/categories/", categories);
   }
 
   /**
@@ -394,9 +367,4 @@ export class PaprikaClient {
   }
 }
 
-export function generateSyncHash(): string {
-  return createHash("sha256")
-    .update(randomUUID().toUpperCase())
-    .digest("hex")
-    .toUpperCase();
-}
+export { generateSyncHash } from "./shared.js";

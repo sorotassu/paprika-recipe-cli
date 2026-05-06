@@ -6,9 +6,9 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Command } from "commander";
 import { createInterface } from "node:readline";
-import { generateSyncHash, PaprikaClient } from "./api.js";
+import { Command } from "commander";
+import { generateSyncHash, PaprikaClient } from "./index.js";
 import {
   loadConfig,
   loadConfigFromEnv,
@@ -38,6 +38,7 @@ import type {
 } from "./types.js";
 import { ExitCode } from "./types.js";
 import { setNoColor, printError, printSuccess, style } from "./output.js";
+import { createResolver, toWritePayload } from "./shared.js";
 
 const VERSION = "0.1.0";
 
@@ -524,37 +525,10 @@ function collectStringOption(value: string, previous: string[] = []): string[] {
   return previous;
 }
 
-function resolveCategoryIdentifier(
-  categories: Category[],
-  identifier: string
-): Category | null {
-  const trimmed = identifier.trim();
-  const normalizedUid = trimmed.toUpperCase();
-  const byUid = categories.find((category) => category.uid.toUpperCase() === normalizedUid);
-  if (byUid) {
-    return byUid;
-  }
-
-  const normalized = trimmed.toLowerCase();
-  const exact = categories.find(
-    (category) => category.name.trim().toLowerCase() === normalized
-  );
-  if (exact) {
-    return exact;
-  }
-
-  const partialMatches = categories.filter((category) =>
-    category.name.trim().toLowerCase().includes(normalized)
-  );
-  if (partialMatches.length > 1) {
-    const names = partialMatches.map((category) => category.name).join(", ");
-    throw new Error(
-      `Multiple categories matched "${identifier}": ${names}. Use a more specific name or the category UID.`
-    );
-  }
-
-  return partialMatches[0] ?? null;
-}
+const resolveCategoryIdentifier = createResolver<Category>(
+  "categories",
+  (category) => category.name
+);
 
 function getNextCategoryOrderFlag(
   categories: Category[],
@@ -572,15 +546,7 @@ function toCategoryWritePayload(
   category: Category,
   overrides: Partial<CategoryWritePayload> = {}
 ): CategoryWritePayload {
-  return {
-    uid: category.uid,
-    name: category.name,
-    order_flag: category.order_flag,
-    parent_uid: category.parent_uid,
-    hash: generateSyncHash(),
-    deleted: false,
-    ...overrides,
-  };
+  return toWritePayload<Category, CategoryWritePayload>(category, overrides);
 }
 
 function normalizeOptionalParentFlag(value?: string): string | undefined {
@@ -594,37 +560,10 @@ function normalizeOptionalParentFlag(value?: string): string | undefined {
   return trimmed;
 }
 
-function resolveBookmarkIdentifier(
-  bookmarks: Bookmark[],
-  identifier: string
-): Bookmark | null {
-  const trimmed = identifier.trim();
-  const normalizedUid = trimmed.toUpperCase();
-  const byUid = bookmarks.find((bookmark) => bookmark.uid.toUpperCase() === normalizedUid);
-  if (byUid) {
-    return byUid;
-  }
-
-  const normalized = trimmed.toLowerCase();
-  const exact = bookmarks.find(
-    (bookmark) => bookmark.title.trim().toLowerCase() === normalized
-  );
-  if (exact) {
-    return exact;
-  }
-
-  const partialMatches = bookmarks.filter((bookmark) =>
-    bookmark.title.trim().toLowerCase().includes(normalized)
-  );
-  if (partialMatches.length > 1) {
-    const titles = partialMatches.map((bookmark) => bookmark.title).join(", ");
-    throw new Error(
-      `Multiple bookmarks matched "${identifier}": ${titles}. Use a more specific title or the bookmark UID.`
-    );
-  }
-
-  return partialMatches[0] ?? null;
-}
+const resolveBookmarkIdentifier = createResolver<Bookmark>(
+  "bookmarks",
+  (bookmark) => bookmark.title
+);
 
 function getNextBookmarkOrderFlag(
   bookmarks: Bookmark[],
@@ -639,15 +578,7 @@ function toBookmarkWritePayload(
   bookmark: Bookmark,
   overrides: Partial<BookmarkWritePayload> = {}
 ): BookmarkWritePayload {
-  return {
-    uid: bookmark.uid,
-    title: bookmark.title,
-    url: bookmark.url,
-    order_flag: bookmark.order_flag,
-    hash: generateSyncHash(),
-    deleted: false,
-    ...overrides,
-  };
+  return toWritePayload<Bookmark, BookmarkWritePayload>(bookmark, overrides);
 }
 
 function decodeHtmlEntities(input: string): string {
@@ -1286,17 +1217,11 @@ async function resolveMealType(
 }
 
 function toMealWritePayload(meal: Meal, overrides: Partial<MealWritePayload> = {}): MealWritePayload {
-  return {
-    uid: meal.uid,
-    recipe_uid: meal.recipe_uid,
-    name: meal.name,
-    date: meal.date,
-    type: meal.type,
-    order_flag: meal.order_flag,
-    hash: generateSyncHash(),
-    deleted: false,
-    ...overrides,
-  };
+  const { uid, recipe_uid, name, date, type, order_flag } = meal;
+  return toWritePayload<
+    { uid: string; recipe_uid: string | null; name: string; date: string; type: number; order_flag: number },
+    MealWritePayload
+  >({ uid, recipe_uid, name, date, type, order_flag }, overrides);
 }
 
 function findMealByUid(meals: Meal[], uid: string): Meal | null {
@@ -1396,7 +1321,7 @@ function toGroceryWritePayload(
     throw new Error(`Grocery item ${item.uid} is missing list_uid.`);
   }
 
-  return {
+  const normalized = {
     uid: item.uid,
     name: item.name,
     ingredient: item.ingredient,
@@ -1410,10 +1335,8 @@ function toGroceryWritePayload(
     aisle: item.aisle,
     aisle_uid: item.aisle_uid ?? null,
     list_uid: item.list_uid,
-    hash: generateSyncHash(),
-    deleted: false,
-    ...overrides,
   };
+  return toWritePayload<typeof normalized, GroceryWritePayload>(normalized, overrides);
 }
 
 program

@@ -93,6 +93,7 @@ paprika pin-recipe "Pasta Carbonara"
 paprika pin-recipe "Pasta Carbonara" --remove
 
 paprika trash-recipe "Pasta Carbonara" --dry-run
+paprika restore-recipe "Pasta Carbonara" --dry-run
 ```
 
 ### Meal Planning
@@ -179,6 +180,8 @@ paprika import-recipe ./recipe.json
 Recipe imports accept a single recipe object or an array of recipe objects. Category values may be existing Paprika category names or UUIDs.
 
 `update-recipe` expects a single recipe object and preserves the target recipe UID while applying fields from the JSON file.
+
+`trash-recipe` and `restore-recipe` are the supported deletion lifecycle. Permanent deletion and fresh local photo upload are intentionally not implemented yet because the Paprika API behavior for those paths is not verified.
 
 ### Get ingredients for a recipe
 

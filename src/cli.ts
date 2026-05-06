@@ -791,6 +791,9 @@ program
       if (!existingRecipe) {
         throw new Error(`Recipe not found: ${identifier}`);
       }
+      if (existingRecipe.in_trash) {
+        throw new Error(`Recipe is already in trash: ${existingRecipe.name}`);
+      }
 
       const recipe = normalizeImportedRecipe({ in_trash: true }, {
         categoryMap: buildCategoryMap(await client.getCategories()),
@@ -812,6 +815,54 @@ program
         console.log(JSON.stringify(saved, null, 2));
       } else {
         console.log(`Trashed recipe: ${style.bold(saved.name)} (${saved.uid})`);
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("restore-recipe")
+  .description("Restore a trashed recipe")
+  .argument("<identifier>", "Recipe UID or name")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(async (identifier: string, options: { json?: boolean; dryRun?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const existingRecipe = await resolveRecipeIdentifier(client, identifier, {
+        includeTrash: true,
+      });
+      if (!existingRecipe) {
+        throw new Error(`Recipe not found: ${identifier}`);
+      }
+      if (!existingRecipe.in_trash) {
+        throw new Error(`Recipe is not in trash: ${existingRecipe.name}`);
+      }
+
+      const recipe = normalizeImportedRecipe({ in_trash: false }, {
+        categoryMap: buildCategoryMap(await client.getCategories()),
+        existingRecipe,
+      });
+
+      if (options.dryRun) {
+        const result = { action: "restore", uid: recipe.uid, name: recipe.name, in_trash: false };
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(`Would restore recipe: ${style.bold(recipe.name)} (${recipe.uid})`);
+        }
+        return;
+      }
+
+      const saved = await client.saveRecipe(recipe);
+      if (options.json) {
+        console.log(JSON.stringify(saved, null, 2));
+      } else {
+        console.log(`Restored recipe: ${style.bold(saved.name)} (${saved.uid})`);
       }
     } catch (error) {
       printError(error instanceof Error ? error.message : String(error));

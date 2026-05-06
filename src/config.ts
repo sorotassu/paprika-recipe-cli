@@ -83,7 +83,7 @@ export function requireConfig(): PaprikaConfig {
 
   // Fall back to file
   const fileConfig = loadConfig();
-  if (fileConfig?.email && fileConfig?.password) {
+  if (fileConfig?.email && (fileConfig.password || fileConfig.token)) {
     return fileConfig;
   }
 

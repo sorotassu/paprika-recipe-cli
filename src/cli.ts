@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { PaprikaClient } from "./api.js";
 import {
   loadConfig,
+  loadConfigFromEnv,
   saveConfig,
   requireConfig,
   getConfigPath,
@@ -128,8 +129,7 @@ program
       const client = new PaprikaClient({ email, password });
       const token = await client.login();
 
-      // Save credentials and token
-      saveConfig({ email, password, token });
+      saveConfig({ email, token });
       printSuccess("Authenticated successfully.");
       console.log(style.dim(`Config saved to ${getConfigPath()}`));
     } catch (error) {
@@ -153,8 +153,8 @@ program
   .description("Show current authenticated user")
   .option("--json", "Output as JSON")
   .action((options: { json?: boolean }) => {
-    const config = loadConfig();
-    if (!config) {
+    const config = loadConfigFromEnv() ?? loadConfig();
+    if (!config?.email || (!config.token && !config.password)) {
       if (options.json) {
         console.log(JSON.stringify({ authenticated: false }));
       } else {

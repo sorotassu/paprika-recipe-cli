@@ -4,7 +4,7 @@
 
 export interface PaprikaConfig {
   email: string;
-  password: string;
+  password?: string;
   token?: string;
 }
 

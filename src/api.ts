@@ -30,7 +30,7 @@ interface LoginResponse {
 
 export class PaprikaClient {
   private email: string;
-  private password: string;
+  private password?: string;
   private token: string | null = null;
 
   constructor(config: PaprikaConfig) {
@@ -45,6 +45,10 @@ export class PaprikaClient {
   async login(): Promise<string> {
     if (this.token) {
       return this.token;
+    }
+
+    if (!this.password) {
+      throw new Error("Not authenticated. Run: paprika auth");
     }
 
     const response = await fetch(LOGIN_URL, {
@@ -90,6 +94,12 @@ export class PaprikaClient {
 
     if (!response.ok) {
       const text = await response.text();
+      if (response.status === 401 || response.status === 403) {
+        this.token = null;
+        throw new Error(
+          "Authentication token expired or was rejected. Run: paprika auth"
+        );
+      }
       throw new Error(`API error ${response.status}: ${text}`);
     }
 
@@ -109,6 +119,16 @@ export class PaprikaClient {
     const parsed = JSON.parse(data) as ApiResponse<T>;
 
     if (parsed.error) {
+      if (
+        /(expired|invalid|unauthorized|auth|token|credential|login)/i.test(
+          parsed.error.message
+        )
+      ) {
+        this.token = null;
+        throw new Error(
+          "Authentication token expired or was rejected. Run: paprika auth"
+        );
+      }
       throw new Error(`Paprika API error: ${parsed.error.message}`);
     }
 

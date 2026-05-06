@@ -481,6 +481,11 @@ type ImportedRecipeInput = Partial<RecipeWritePayload> & {
   categories?: string[];
 };
 
+interface FetchedWebPage {
+  url: string;
+  html: string;
+}
+
 function normalizeImportedCategories(
   categories: ImportedRecipeInput["categories"] | undefined,
   categoryMap: Map<string, string>,
@@ -512,6 +517,11 @@ function buildCategoryMap(categories: Category[]): Map<string, string> {
   return new Map(
     categories.map((category) => [category.name.trim().toLowerCase(), category.uid])
   );
+}
+
+function collectStringOption(value: string, previous: string[] = []): string[] {
+  previous.push(value);
+  return previous;
 }
 
 function resolveCategoryIdentifier(
@@ -637,6 +647,390 @@ function toBookmarkWritePayload(
     hash: generateSyncHash(),
     deleted: false,
     ...overrides,
+  };
+}
+
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (_, value: string) =>
+      String.fromCodePoint(Number.parseInt(value, 10))
+    )
+    .replace(/&#x([0-9a-f]+);/gi, (_, value: string) =>
+      String.fromCodePoint(Number.parseInt(value, 16))
+    );
+}
+
+function stripHtml(input: string): string {
+  return decodeHtmlEntities(input.replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeWhitespace(input: string): string {
+  return input
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function formatIsoDuration(input: string | null | undefined): string {
+  if (!input) {
+    return "";
+  }
+
+  const trimmed = input.trim();
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i.exec(
+    trimmed
+  );
+  if (!match) {
+    return trimmed;
+  }
+
+  const days = Number(match[1] ?? 0);
+  const hours = Number(match[2] ?? 0);
+  const minutes = Number(match[3] ?? 0);
+  const seconds = Number.parseFloat(match[4] ?? "0");
+  const parts: string[] = [];
+
+  if (days > 0) {
+    parts.push(`${days} day${days === 1 ? "" : "s"}`);
+  }
+  if (hours > 0) {
+    parts.push(`${hours} hr${hours === 1 ? "" : "s"}`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes} min${minutes === 1 ? "" : "s"}`);
+  }
+  if (seconds > 0 && parts.length === 0) {
+    const roundedSeconds = Math.round(seconds);
+    parts.push(`${roundedSeconds} sec${roundedSeconds === 1 ? "" : "s"}`);
+  }
+
+  return parts.join(" ") || trimmed;
+}
+
+function normalizeRecipeYield(value: unknown): string {
+  if (typeof value === "string") {
+    return normalizeWhitespace(stripHtml(value));
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => (typeof entry === "string" ? normalizeWhitespace(stripHtml(entry)) : ""))
+      .filter(Boolean)
+      .join(", ");
+  }
+  return "";
+}
+
+function normalizeImageUrl(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.trim() || null;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const match = normalizeImageUrl(entry);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+  if (value && typeof value === "object") {
+    const candidate = (value as Record<string, unknown>).url;
+    return typeof candidate === "string" ? candidate.trim() || null : null;
+  }
+  return null;
+}
+
+function normalizeNameList(value: unknown): string[] {
+  if (typeof value === "string") {
+    const normalized = normalizeWhitespace(stripHtml(value));
+    return normalized ? [normalized] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => normalizeNameList(entry));
+  }
+  if (value && typeof value === "object") {
+    const objectValue = value as Record<string, unknown>;
+    if (typeof objectValue.name === "string") {
+      const normalized = normalizeWhitespace(stripHtml(objectValue.name));
+      return normalized ? [normalized] : [];
+    }
+  }
+  return [];
+}
+
+function formatNutrition(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+
+  const nutrition = value as Record<string, unknown>;
+  const lines = Object.entries(nutrition)
+    .filter(([key, entry]) => key !== "@type" && key !== "@context" && entry != null)
+    .map(([key, entry]) => {
+      const label = key
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .replace(/^./, (char) => char.toUpperCase());
+      const raw = typeof entry === "string" || typeof entry === "number"
+        ? String(entry)
+        : "";
+      const normalized = normalizeWhitespace(stripHtml(raw));
+      return normalized ? `${label}: ${normalized}` : "";
+    })
+    .filter(Boolean);
+
+  return lines.join("\n");
+}
+
+function formatRecipeInstructions(value: unknown): string {
+  if (typeof value === "string") {
+    return normalizeWhitespace(stripHtml(value));
+  }
+
+  if (!Array.isArray(value)) {
+    return "";
+  }
+
+  const parts: string[] = [];
+
+  const pushInstruction = (entry: unknown): void => {
+    if (typeof entry === "string") {
+      const normalized = normalizeWhitespace(stripHtml(entry));
+      if (normalized) {
+        parts.push(normalized);
+      }
+      return;
+    }
+
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+
+    const node = entry as Record<string, unknown>;
+    const rawType = node["@type"];
+    const types = Array.isArray(rawType) ? rawType : [rawType];
+    const normalizedTypes = types
+      .filter((type): type is string => typeof type === "string")
+      .map((type) => type.toLowerCase());
+
+    if (normalizedTypes.includes("howtosection")) {
+      const sectionName = typeof node.name === "string"
+        ? normalizeWhitespace(stripHtml(node.name))
+        : "";
+      if (sectionName) {
+        parts.push(sectionName);
+      }
+      const children = Array.isArray(node.itemListElement)
+        ? node.itemListElement
+        : node.itemListElement
+          ? [node.itemListElement]
+          : [];
+      for (const child of children) {
+        pushInstruction(child);
+      }
+      return;
+    }
+
+    const text = typeof node.text === "string"
+      ? normalizeWhitespace(stripHtml(node.text))
+      : typeof node.name === "string"
+        ? normalizeWhitespace(stripHtml(node.name))
+        : "";
+    if (text) {
+      parts.push(text);
+    }
+  };
+
+  for (const entry of value) {
+    pushInstruction(entry);
+  }
+
+  return parts.join("\n\n");
+}
+
+function parseJsonLdCandidates(html: string): Array<Record<string, unknown>> {
+  const candidates: Array<Record<string, unknown>> = [];
+  const scriptPattern = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+
+  for (const match of html.matchAll(scriptPattern)) {
+    const raw = (match[1] ?? "")
+      .replace(/^\s*<!--/, "")
+      .replace(/-->\s*$/, "")
+      .replace(/^\s*<!\[CDATA\[/, "")
+      .replace(/\]\]>\s*$/, "")
+      .trim();
+
+    if (!raw) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      const visit = (value: unknown): void => {
+        if (Array.isArray(value)) {
+          for (const entry of value) {
+            visit(entry);
+          }
+          return;
+        }
+        if (!value || typeof value !== "object") {
+          return;
+        }
+
+        const record = value as Record<string, unknown>;
+        const rawType = record["@type"];
+        const types = Array.isArray(rawType) ? rawType : [rawType];
+        const hasRecipeType = types.some(
+          (type) => typeof type === "string" && type.toLowerCase() === "recipe"
+        );
+        if (hasRecipeType) {
+          candidates.push(record);
+        }
+
+        for (const nested of Object.values(record)) {
+          if (nested && typeof nested === "object") {
+            visit(nested);
+          }
+        }
+      };
+
+      visit(parsed);
+    } catch {
+      continue;
+    }
+  }
+
+  return candidates;
+}
+
+function scoreRecipeCandidate(candidate: Record<string, unknown>): number {
+  let score = 0;
+  if (typeof candidate.name === "string" && candidate.name.trim()) {
+    score += 10;
+  }
+  if (Array.isArray(candidate.recipeIngredient) && candidate.recipeIngredient.length > 0) {
+    score += 8;
+  }
+  if (candidate.recipeInstructions) {
+    score += 8;
+  }
+  if (typeof candidate.description === "string" && candidate.description.trim()) {
+    score += 2;
+  }
+  if (candidate.image) {
+    score += 1;
+  }
+  return score;
+}
+
+function extractRecipeFromHtml(page: FetchedWebPage): ImportedRecipeInput {
+  const candidates = parseJsonLdCandidates(page.html).sort(
+    (left, right) => scoreRecipeCandidate(right) - scoreRecipeCandidate(left)
+  );
+  const candidate = candidates[0];
+
+  if (!candidate) {
+    throw new Error(
+      "No schema.org Recipe JSON-LD block was found on the page."
+    );
+  }
+
+  const ingredients = Array.isArray(candidate.recipeIngredient)
+    ? candidate.recipeIngredient
+        .map((entry) => (typeof entry === "string" ? normalizeWhitespace(stripHtml(entry)) : ""))
+        .filter(Boolean)
+        .join("\n")
+    : typeof candidate.recipeIngredient === "string"
+      ? normalizeWhitespace(stripHtml(candidate.recipeIngredient))
+      : "";
+  const directions = formatRecipeInstructions(candidate.recipeInstructions);
+  const title = typeof candidate.name === "string"
+    ? normalizeWhitespace(stripHtml(candidate.name))
+    : "";
+  const description = typeof candidate.description === "string"
+    ? normalizeWhitespace(stripHtml(candidate.description))
+    : "";
+  const siteUrl = new URL(page.url);
+  const sourceNames = [
+    ...normalizeNameList(candidate.author),
+    ...normalizeNameList(candidate.publisher),
+  ];
+  const source = sourceNames[0] ?? siteUrl.hostname.replace(/^www\./, "");
+
+  return {
+    name: title,
+    description,
+    ingredients,
+    directions,
+    notes: "",
+    nutritional_info: formatNutrition(candidate.nutrition),
+    servings: normalizeRecipeYield(candidate.recipeYield),
+    difficulty: "",
+    prep_time: formatIsoDuration(
+      typeof candidate.prepTime === "string" ? candidate.prepTime : undefined
+    ),
+    cook_time: formatIsoDuration(
+      typeof candidate.cookTime === "string" ? candidate.cookTime : undefined
+    ),
+    total_time: formatIsoDuration(
+      typeof candidate.totalTime === "string" ? candidate.totalTime : undefined
+    ),
+    source,
+    source_url: page.url,
+    image_url: normalizeImageUrl(candidate.image),
+    categories: [],
+  };
+}
+
+async function fetchWebPage(url: string): Promise<FetchedWebPage> {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw new Error(`Invalid URL: ${url}`);
+  }
+
+  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    throw new Error(`Unsupported URL protocol: ${parsedUrl.protocol}`);
+  }
+
+  const response = await fetch(parsedUrl.toString(), {
+    redirect: "follow",
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${parsedUrl.toString()} (${response.status}).`);
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
+    throw new Error(
+      `URL did not return HTML content (${contentType || "unknown content type"}).`
+    );
+  }
+
+  return {
+    url: response.url,
+    html: await response.text(),
   };
 }
 
@@ -1200,6 +1594,123 @@ program
           for (const result of results) {
             console.log(`• ${result.action}: ${style.bold(result.name)} (${result.uid})`);
           }
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("import-url")
+  .description("Fetch a recipe webpage, extract recipe data, and import it into Paprika")
+  .argument("<url>", "Recipe page URL")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Validate and prepare the import without writing to Paprika")
+  .option(
+    "--allow-duplicate",
+    "Create a new recipe even if an exact name match already exists"
+  )
+  .option(
+    "--update-existing",
+    "Update the exact-name match instead of creating a duplicate"
+  )
+  .option(
+    "--category <category>",
+    "Assign one or more Paprika categories by name or UID",
+    collectStringOption,
+    [] as string[]
+  )
+  .action(
+    async (
+      url: string,
+      options: {
+        json?: boolean;
+        dryRun?: boolean;
+        allowDuplicate?: boolean;
+        updateExisting?: boolean;
+        category?: string[];
+      }
+    ) => {
+      if (options.allowDuplicate && options.updateExisting) {
+        printError("Choose either --allow-duplicate or --update-existing, not both.");
+        process.exit(ExitCode.InvalidUsage);
+      }
+
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        if (!options.json) {
+          console.log("Fetching recipe page...");
+        }
+        const page = await fetchWebPage(url);
+        const extractedRecipe = extractRecipeFromHtml(page);
+        if (options.category && options.category.length > 0) {
+          extractedRecipe.categories = options.category;
+        }
+
+        const categoryMap = buildCategoryMap(await client.getCategories());
+        const recipeName = extractedRecipe.name?.trim() ?? "";
+        let existingRecipe: Recipe | null = null;
+
+        if (!options.allowDuplicate || options.updateExisting) {
+          if (!options.json) {
+            console.log("Checking for existing recipes...");
+          }
+
+          const matches = (await client.getAllRecipes()).filter(
+            (recipe) =>
+              !recipe.in_trash &&
+              recipe.name.trim().toLowerCase() === recipeName.toLowerCase()
+          );
+
+          if (matches.length > 1 && options.updateExisting) {
+            throw new Error(
+              `Multiple existing recipes named "${recipeName}". Refusing ambiguous update.`
+            );
+          }
+
+          if (matches.length > 0 && !options.allowDuplicate && !options.updateExisting) {
+            throw new Error(
+              `Recipe already exists: ${recipeName}. Use --update-existing or --allow-duplicate.`
+            );
+          }
+
+          existingRecipe = options.updateExisting ? (matches[0] ?? null) : null;
+        }
+
+        const recipe = normalizeImportedRecipe(extractedRecipe, {
+          categoryMap,
+          existingRecipe,
+        });
+        const action = existingRecipe ? "update" : "create";
+
+        if (options.dryRun) {
+          const result = {
+            action,
+            name: recipe.name,
+            uid: recipe.uid,
+            categories: recipe.categories,
+            source_url: recipe.source_url,
+          };
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2));
+          } else {
+            console.log(`Would ${action} recipe: ${style.bold(recipe.name)} (${recipe.uid})`);
+            console.log(style.dim(recipe.source_url));
+          }
+          return;
+        }
+
+        const saved = await client.saveRecipe(recipe);
+        if (options.json) {
+          console.log(JSON.stringify(saved, null, 2));
+        } else {
+          const verb = action === "update" ? "Updated" : "Imported";
+          console.log(`${verb} recipe: ${style.bold(saved.name)} (${saved.uid})`);
+          console.log(style.dim(saved.source_url));
         }
       } catch (error) {
         printError(error instanceof Error ? error.message : String(error));

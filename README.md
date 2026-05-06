@@ -70,6 +70,9 @@ paprika update-bookmark <bookmark-uid> --url https://www.paprikaapp.com/
 
 paprika remove-bookmark "Paprika Homepage"
 paprika remove-bookmark <bookmark-uid> --dry-run
+
+paprika import-url https://example.com/recipe
+paprika import-url https://example.com/recipe --dry-run --json
 ```
 
 ### Recipes
@@ -91,6 +94,11 @@ paprika import-recipe ./recipe.json                # Create from JSON
 paprika import-recipe ./recipe.json --dry-run      # Validate only
 paprika import-recipe ./recipe.json --update-existing
 paprika import-recipe ./recipe.json --allow-duplicate
+
+paprika import-url https://example.com/recipe      # Fetch + extract + import
+paprika import-url https://example.com/recipe --dry-run
+paprika import-url https://example.com/recipe --update-existing
+paprika import-url https://example.com/recipe --category Dinner --category Bread
 
 paprika update-recipe "Pasta Carbonara" ./recipe.json
 paprika update-recipe <uid> ./recipe.json --dry-run

@@ -372,6 +372,16 @@ npm run build
 node dist/cli.js --help
 ```
 
+Unit tests for the shared helpers run with [vitest](https://vitest.dev/):
+
+```bash
+npm test            # one-shot run
+npm run test:watch  # interactive watch mode
+```
+
+The Paprika sync endpoints used by this CLI, plus what is verified vs.
+intentionally unsupported, are documented in [`docs/API.md`](docs/API.md).
+
 ## License
 
 MIT © [Matt Russell](https://github.com/mjrussell)

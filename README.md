@@ -82,6 +82,17 @@ paprika import-recipe ./recipe.json                # Create from JSON
 paprika import-recipe ./recipe.json --dry-run      # Validate only
 paprika import-recipe ./recipe.json --update-existing
 paprika import-recipe ./recipe.json --allow-duplicate
+
+paprika update-recipe "Pasta Carbonara" ./recipe.json
+paprika update-recipe <uid> ./recipe.json --dry-run
+
+paprika favorite-recipe "Pasta Carbonara"
+paprika favorite-recipe "Pasta Carbonara" --remove
+
+paprika pin-recipe "Pasta Carbonara"
+paprika pin-recipe "Pasta Carbonara" --remove
+
+paprika trash-recipe "Pasta Carbonara" --dry-run
 ```
 
 ### Meal Planning
@@ -166,6 +177,8 @@ paprika import-recipe ./recipe.json
 ```
 
 Recipe imports accept a single recipe object or an array of recipe objects. Category values may be existing Paprika category names or UUIDs.
+
+`update-recipe` expects a single recipe object and preserves the target recipe UID while applying fields from the JSON file.
 
 ### Get ingredients for a recipe
 

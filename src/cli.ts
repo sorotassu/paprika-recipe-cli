@@ -436,7 +436,10 @@ function normalizeImportedRecipe(
       typeof input.rating === "number" && Number.isFinite(input.rating)
         ? Math.max(0, Math.trunc(input.rating))
         : existingRecipe?.rating ?? 0,
-    in_trash: false,
+    in_trash:
+      typeof input.in_trash === "boolean"
+        ? input.in_trash
+        : existingRecipe?.in_trash ?? false,
     is_pinned:
       typeof input.is_pinned === "boolean"
         ? input.is_pinned
@@ -450,7 +453,7 @@ function normalizeImportedRecipe(
         ? input.created.trim()
         : existingRecipe?.created ??
           new Date().toISOString().slice(0, 19).replace("T", " "),
-    deleted: false,
+    deleted: typeof input.deleted === "boolean" ? input.deleted : false,
   };
 
   if (!recipe.name) {
@@ -465,6 +468,61 @@ function normalizeImportedRecipe(
     .toUpperCase();
 
   return recipe;
+}
+
+async function resolveRecipeIdentifier(
+  client: PaprikaClient,
+  identifier: string,
+  options: { includeTrash?: boolean } = {}
+): Promise<Recipe | null> {
+  if (isUuid(identifier)) {
+    try {
+      return await client.getRecipe(identifier.toUpperCase());
+    } catch {
+      return null;
+    }
+  }
+
+  const recipes = await client.getAllRecipes();
+  const filtered = options.includeTrash ? recipes : recipes.filter((recipe) => !recipe.in_trash);
+  const normalized = identifier.trim().toLowerCase();
+  const exactMatches = filtered.filter(
+    (recipe) => recipe.name.trim().toLowerCase() === normalized
+  );
+
+  if (exactMatches.length > 1) {
+    throw new Error(`Multiple recipes named "${identifier}". Use the recipe UID.`);
+  }
+  if (exactMatches.length === 1) {
+    return exactMatches[0]!;
+  }
+
+  const partialMatches = filtered.filter((recipe) =>
+    recipe.name.trim().toLowerCase().includes(normalized)
+  );
+
+  if (partialMatches.length > 1) {
+    const names = partialMatches.slice(0, 5).map((recipe) => recipe.name).join(", ");
+    throw new Error(
+      `Multiple recipes matched "${identifier}": ${names}. Use a more specific name or the recipe UID.`
+    );
+  }
+
+  return partialMatches[0] ?? null;
+}
+
+function readSingleImportedRecipe(path: string): ImportedRecipeInput {
+  const raw = readFileSync(path, "utf-8");
+  const parsed = JSON.parse(raw) as ImportedRecipeInput | ImportedRecipeInput[];
+
+  if (Array.isArray(parsed)) {
+    if (parsed.length !== 1) {
+      throw new Error("Expected a single recipe object for this command.");
+    }
+    return parsed[0]!;
+  }
+
+  return parsed;
 }
 
 program
@@ -645,6 +703,232 @@ program
           for (const result of results) {
             console.log(`• ${result.action}: ${style.bold(result.name)} (${result.uid})`);
           }
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("update-recipe")
+  .description("Update an existing recipe from a JSON file")
+  .argument("<identifier>", "Recipe UID or name")
+  .argument("<path>", "Path to a JSON file containing one recipe object")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Validate and prepare the update without writing to Paprika")
+  .action(
+    async (
+      identifier: string,
+      path: string,
+      options: { json?: boolean; dryRun?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const existingRecipe = await resolveRecipeIdentifier(client, identifier, {
+          includeTrash: true,
+        });
+
+        if (!existingRecipe) {
+          throw new Error(`Recipe not found: ${identifier}`);
+        }
+
+        const input = readSingleImportedRecipe(path);
+        const categoryMap = buildCategoryMap(await client.getCategories());
+        const recipe = normalizeImportedRecipe(input, {
+          categoryMap,
+          existingRecipe,
+        });
+
+        if (options.dryRun) {
+          const result = {
+            action: "update",
+            uid: recipe.uid,
+            name: recipe.name,
+            categories: recipe.categories,
+            in_trash: recipe.in_trash,
+            is_pinned: recipe.is_pinned,
+            on_favorites: recipe.on_favorites,
+          };
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2));
+          } else {
+            console.log(`Would update recipe: ${style.bold(recipe.name)} (${recipe.uid})`);
+          }
+          return;
+        }
+
+        const saved = await client.saveRecipe(recipe);
+        if (options.json) {
+          console.log(JSON.stringify(saved, null, 2));
+        } else {
+          console.log(`Updated recipe: ${style.bold(saved.name)} (${saved.uid})`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("trash-recipe")
+  .description("Move a recipe to the Paprika trash")
+  .argument("<identifier>", "Recipe UID or name")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(async (identifier: string, options: { json?: boolean; dryRun?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const existingRecipe = await resolveRecipeIdentifier(client, identifier, {
+        includeTrash: true,
+      });
+      if (!existingRecipe) {
+        throw new Error(`Recipe not found: ${identifier}`);
+      }
+
+      const recipe = normalizeImportedRecipe({ in_trash: true }, {
+        categoryMap: buildCategoryMap(await client.getCategories()),
+        existingRecipe,
+      });
+
+      if (options.dryRun) {
+        const result = { action: "trash", uid: recipe.uid, name: recipe.name, in_trash: true };
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(`Would trash recipe: ${style.bold(recipe.name)} (${recipe.uid})`);
+        }
+        return;
+      }
+
+      const saved = await client.saveRecipe(recipe);
+      if (options.json) {
+        console.log(JSON.stringify(saved, null, 2));
+      } else {
+        console.log(`Trashed recipe: ${style.bold(saved.name)} (${saved.uid})`);
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("favorite-recipe")
+  .description("Toggle a recipe's favorite flag")
+  .argument("<identifier>", "Recipe UID or name")
+  .option("--json", "Output as JSON")
+  .option("--remove", "Clear the favorite flag instead of setting it")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      identifier: string,
+      options: { json?: boolean; remove?: boolean; dryRun?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const existingRecipe = await resolveRecipeIdentifier(client, identifier, {
+          includeTrash: true,
+        });
+        if (!existingRecipe) {
+          throw new Error(`Recipe not found: ${identifier}`);
+        }
+
+        const enabled = !options.remove;
+        const recipe = normalizeImportedRecipe({ on_favorites: enabled }, {
+          categoryMap: buildCategoryMap(await client.getCategories()),
+          existingRecipe,
+        });
+
+        if (options.dryRun) {
+          const result = {
+            action: enabled ? "favorite" : "unfavorite",
+            uid: recipe.uid,
+            name: recipe.name,
+            on_favorites: recipe.on_favorites,
+          };
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2));
+          } else {
+            const verb = enabled ? "favorite" : "unfavorite";
+            console.log(`Would ${verb} recipe: ${style.bold(recipe.name)} (${recipe.uid})`);
+          }
+          return;
+        }
+
+        const saved = await client.saveRecipe(recipe);
+        if (options.json) {
+          console.log(JSON.stringify(saved, null, 2));
+        } else {
+          const verb = enabled ? "Favorited" : "Unfavorited";
+          console.log(`${verb} recipe: ${style.bold(saved.name)} (${saved.uid})`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("pin-recipe")
+  .description("Toggle a recipe's pinned flag")
+  .argument("<identifier>", "Recipe UID or name")
+  .option("--json", "Output as JSON")
+  .option("--remove", "Clear the pinned flag instead of setting it")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      identifier: string,
+      options: { json?: boolean; remove?: boolean; dryRun?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const existingRecipe = await resolveRecipeIdentifier(client, identifier, {
+          includeTrash: true,
+        });
+        if (!existingRecipe) {
+          throw new Error(`Recipe not found: ${identifier}`);
+        }
+
+        const enabled = !options.remove;
+        const recipe = normalizeImportedRecipe({ is_pinned: enabled }, {
+          categoryMap: buildCategoryMap(await client.getCategories()),
+          existingRecipe,
+        });
+
+        if (options.dryRun) {
+          const result = {
+            action: enabled ? "pin" : "unpin",
+            uid: recipe.uid,
+            name: recipe.name,
+            is_pinned: recipe.is_pinned,
+          };
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2));
+          } else {
+            const verb = enabled ? "pin" : "unpin";
+            console.log(`Would ${verb} recipe: ${style.bold(recipe.name)} (${recipe.uid})`);
+          }
+          return;
+        }
+
+        const saved = await client.saveRecipe(recipe);
+        if (options.json) {
+          console.log(JSON.stringify(saved, null, 2));
+        } else {
+          const verb = enabled ? "Pinned" : "Unpinned";
+          console.log(`${verb} recipe: ${style.bold(saved.name)} (${saved.uid})`);
         }
       } catch (error) {
         printError(error instanceof Error ? error.message : String(error));

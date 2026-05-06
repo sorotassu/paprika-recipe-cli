@@ -20,6 +20,7 @@ import {
 import type {
   Bookmark,
   Category,
+  CategoryWritePayload,
   GroceryAisle,
   GroceryItem,
   GroceryList,
@@ -346,6 +347,76 @@ function buildCategoryMap(categories: Category[]): Map<string, string> {
   return new Map(
     categories.map((category) => [category.name.trim().toLowerCase(), category.uid])
   );
+}
+
+function resolveCategoryIdentifier(
+  categories: Category[],
+  identifier: string
+): Category | null {
+  const trimmed = identifier.trim();
+  const normalizedUid = trimmed.toUpperCase();
+  const byUid = categories.find((category) => category.uid.toUpperCase() === normalizedUid);
+  if (byUid) {
+    return byUid;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  const exact = categories.find(
+    (category) => category.name.trim().toLowerCase() === normalized
+  );
+  if (exact) {
+    return exact;
+  }
+
+  const partialMatches = categories.filter((category) =>
+    category.name.trim().toLowerCase().includes(normalized)
+  );
+  if (partialMatches.length > 1) {
+    const names = partialMatches.map((category) => category.name).join(", ");
+    throw new Error(
+      `Multiple categories matched "${identifier}": ${names}. Use a more specific name or the category UID.`
+    );
+  }
+
+  return partialMatches[0] ?? null;
+}
+
+function getNextCategoryOrderFlag(
+  categories: Category[],
+  parentUid: string | null,
+  skipUid?: string
+): number {
+  return categories
+    .filter(
+      (category) => category.uid !== skipUid && category.parent_uid === parentUid
+    )
+    .reduce((max, category) => Math.max(max, category.order_flag), -1) + 1;
+}
+
+function toCategoryWritePayload(
+  category: Category,
+  overrides: Partial<CategoryWritePayload> = {}
+): CategoryWritePayload {
+  return {
+    uid: category.uid,
+    name: category.name,
+    order_flag: category.order_flag,
+    parent_uid: category.parent_uid,
+    hash: generateSyncHash(),
+    deleted: false,
+    ...overrides,
+  };
+}
+
+function normalizeOptionalParentFlag(value?: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "none" || trimmed.toLowerCase() === "root") {
+    return "";
+  }
+  return trimmed;
 }
 
 function normalizeImportedRecipe(
@@ -1978,18 +2049,247 @@ program
       if (options.json) {
         console.log(JSON.stringify(categories, null, 2));
       } else {
-        console.log("\nCategories:\n");
-        for (const cat of categories.sort((a, b) =>
-          a.name.localeCompare(b.name)
-        )) {
-          console.log(`• ${cat.name}`);
+        const byParent = new Map<string | null, Category[]>();
+        for (const category of categories) {
+          const existing = byParent.get(category.parent_uid) ?? [];
+          existing.push(category);
+          byParent.set(category.parent_uid, existing);
         }
+
+        const printTree = (parentUid: string | null, depth: number): void => {
+          const children = (byParent.get(parentUid) ?? []).sort(
+            (a, b) => a.order_flag - b.order_flag || a.name.localeCompare(b.name)
+          );
+          for (const category of children) {
+            const prefix = "  ".repeat(depth);
+            console.log(
+              `${prefix}• ${category.name} ${style.dim("[" + category.uid + "]")}`
+            );
+            printTree(category.uid, depth + 1);
+          }
+        };
+
+        console.log("\nCategories:\n");
+        printTree(null, 0);
       }
     } catch (error) {
       printError(error instanceof Error ? error.message : String(error));
       process.exit(ExitCode.Failure);
     }
   });
+
+program
+  .command("create-category")
+  .description("Create a recipe category")
+  .argument("<name>", "Category name")
+  .option("--parent <identifier>", 'Parent category name or UID (use "none" for root)')
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      name: string,
+      options: { parent?: string; json?: boolean; dryRun?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const categories = await client.getCategories();
+        const normalizedParent = normalizeOptionalParentFlag(options.parent);
+        const parent =
+          normalizedParent === undefined
+            ? null
+            : normalizedParent === ""
+              ? null
+              : resolveCategoryIdentifier(categories, normalizedParent);
+
+        if (normalizedParent !== undefined && normalizedParent !== "" && !parent) {
+          throw new Error(`Parent category not found: ${options.parent}`);
+        }
+
+        const payload: CategoryWritePayload = {
+          uid: randomUUID().toUpperCase(),
+          name: name.trim(),
+          order_flag: getNextCategoryOrderFlag(categories, parent?.uid ?? null),
+          parent_uid: parent?.uid ?? null,
+          hash: generateSyncHash(),
+          deleted: false,
+        };
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would create category: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveCategories([payload]);
+        const createdCategory = resolveCategoryIdentifier(
+          await client.getCategories(),
+          payload.uid
+        );
+        if (!createdCategory) {
+          throw new Error("Category was created but could not be reloaded from Paprika.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(createdCategory, null, 2));
+        } else {
+          console.log(`Created category: ${style.bold(createdCategory.name)} ${style.dim("[" + createdCategory.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("rename-category")
+  .description("Rename or re-parent a recipe category")
+  .argument("<identifier>", "Category name or UID")
+  .argument("[name]", "New category name")
+  .option("--parent <identifier>", 'New parent category name or UID (use "none" for root)')
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      identifier: string,
+      name: string | undefined,
+      options: { parent?: string; json?: boolean; dryRun?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const categories = await client.getCategories();
+        const existingCategory = resolveCategoryIdentifier(categories, identifier);
+        if (!existingCategory) {
+          throw new Error(`Category not found: ${identifier}`);
+        }
+        if (!name?.trim() && options.parent === undefined) {
+          throw new Error("Provide a new category name or --parent.");
+        }
+
+        const normalizedParent = normalizeOptionalParentFlag(options.parent);
+        const parent =
+          normalizedParent === undefined
+            ? null
+            : normalizedParent === ""
+              ? null
+              : resolveCategoryIdentifier(categories, normalizedParent);
+
+        if (normalizedParent !== undefined && normalizedParent !== "" && !parent) {
+          throw new Error(`Parent category not found: ${options.parent}`);
+        }
+        if (parent && parent.uid === existingCategory.uid) {
+          throw new Error("A category cannot be its own parent.");
+        }
+
+        const nextParentUid =
+          normalizedParent === undefined
+            ? existingCategory.parent_uid
+            : parent?.uid ?? null;
+        const parentChanged = nextParentUid !== existingCategory.parent_uid;
+
+        const payload = toCategoryWritePayload(existingCategory, {
+          name: name?.trim() || existingCategory.name,
+          parent_uid: nextParentUid,
+          order_flag: parentChanged
+            ? getNextCategoryOrderFlag(categories, nextParentUid, existingCategory.uid)
+            : existingCategory.order_flag,
+        });
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would update category: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveCategories([payload]);
+        const updatedCategory = resolveCategoryIdentifier(
+          await client.getCategories(),
+          payload.uid
+        );
+        if (!updatedCategory) {
+          throw new Error("Category was updated but could not be reloaded from Paprika.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(updatedCategory, null, 2));
+        } else {
+          console.log(`Updated category: ${style.bold(updatedCategory.name)} ${style.dim("[" + updatedCategory.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("delete-category")
+  .description("Delete a recipe category")
+  .argument("<identifier>", "Category name or UID")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (identifier: string, options: { json?: boolean; dryRun?: boolean }) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const categories = await client.getCategories();
+        const existingCategory = resolveCategoryIdentifier(categories, identifier);
+        if (!existingCategory) {
+          throw new Error(`Category not found: ${identifier}`);
+        }
+
+        const childCategories = categories.filter(
+          (category) => category.parent_uid === existingCategory.uid
+        );
+        if (childCategories.length > 0) {
+          throw new Error(
+            `Category has ${childCategories.length} child categories. Re-parent or delete them first.`
+          );
+        }
+
+        const payload = toCategoryWritePayload(existingCategory, { deleted: true });
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would delete category: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveCategories([payload]);
+        const deletedCategory = resolveCategoryIdentifier(
+          await client.getCategories(),
+          payload.uid
+        );
+        if (deletedCategory) {
+          throw new Error("Category still exists after delete request.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify({ removed: true, uid: payload.uid, name: payload.name }, null, 2));
+        } else {
+          console.log(`Deleted category: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
 
 // ============================================
 // Helper Functions

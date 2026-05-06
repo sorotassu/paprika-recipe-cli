@@ -162,6 +162,15 @@ export interface Category {
   parent_uid: string | null;
 }
 
+export interface CategoryWritePayload {
+  uid: string;
+  name: string;
+  order_flag: number;
+  parent_uid: string | null;
+  hash: string;
+  deleted: boolean;
+}
+
 export interface Bookmark {
   uid: string;
   title: string;

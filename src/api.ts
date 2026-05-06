@@ -18,6 +18,7 @@ import type {
   GroceryList,
   GroceryWritePayload,
   Category,
+  CategoryWritePayload,
   Bookmark,
   PantryItem,
   Menu,
@@ -285,6 +286,25 @@ export class PaprikaClient {
    */
   async getCategories(): Promise<Category[]> {
     return this.request<Category[]>("/sync/categories/");
+  }
+
+  /**
+   * Create, update, or delete category entries
+   */
+  async saveCategories(categories: CategoryWritePayload[]): Promise<void> {
+    const form = new FormData();
+    form.append(
+      "data",
+      new Blob([gzipSync(Buffer.from(JSON.stringify(categories), "utf-8"))], {
+        type: "application/octet-stream",
+      }),
+      "categories.gz"
+    );
+
+    await this.request<true>("/sync/categories/", {
+      method: "POST",
+      body: form,
+    });
   }
 
   /**

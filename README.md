@@ -152,8 +152,19 @@ paprika pantry --json
 ### Categories
 
 ```bash
-paprika categories       # List all categories
+paprika categories                         # List all categories (includes UIDs)
 paprika categories --json
+
+paprika create-category "Weeknight"
+paprika create-category "Noodles" --parent "Main Courses"
+paprika create-category "Scratch" --dry-run --json
+
+paprika rename-category "Weeknight" "Quick Weeknight"
+paprika rename-category <category-uid> --parent "Main Courses"
+paprika rename-category <category-uid> --parent none
+
+paprika delete-category "Quick Weeknight"
+paprika delete-category <category-uid> --dry-run
 ```
 
 ## Options
@@ -250,6 +261,7 @@ const menuItems = await client.getMenuItems();
 const groceryLists = await client.getGroceryLists();
 const groceryAisles = await client.getGroceryAisles();
 const groceries = await client.getGroceries();
+const categories = await client.getCategories();
 const pantry = await client.getPantry();
 await client.saveMeals([
   {
@@ -278,6 +290,16 @@ await client.saveGroceries([
     aisle: groceryAisles[0]?.name ?? "",
     aisle_uid: groceryAisles[0]?.uid ?? null,
     list_uid: groceryLists[0]!.uid,
+    hash: generateSyncHash(),
+    deleted: false,
+  },
+]);
+await client.saveCategories([
+  {
+    uid: "44444444-4444-4444-4444-444444444444",
+    name: "Example Category",
+    order_flag: 0,
+    parent_uid: categories[0]?.uid ?? null,
     hash: generateSyncHash(),
     deleted: false,
   },

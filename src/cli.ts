@@ -17,7 +17,17 @@ import {
   getConfigPath,
   clearConfig,
 } from "./config.js";
-import type { Category, Meal, Recipe, RecipeWritePayload } from "./types.js";
+import type {
+  Bookmark,
+  Category,
+  Meal,
+  Menu,
+  MenuItem,
+  PantryItem,
+  Recipe,
+  RecipeWritePayload,
+  SyncStatusResponse,
+} from "./types.js";
 import { ExitCode } from "./types.js";
 import { setNoColor, printError, printSuccess, style } from "./output.js";
 
@@ -170,6 +180,69 @@ program
       );
     } else {
       console.log(`Authenticated as: ${style.bold(config.email)}`);
+    }
+  });
+
+// ============================================
+// Read-only Utility Commands
+// ============================================
+
+program
+  .command("status")
+  .description("Show Paprika sync object counts")
+  .option("--json", "Output as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const status = await client.getStatus();
+
+      if (options.json) {
+        console.log(JSON.stringify(status, null, 2));
+      } else {
+        const rows: Array<[string, number]> = Object.entries(status)
+          .filter(([, value]) => typeof value === "number")
+          .sort((a, b) => a[0].localeCompare(b[0])) as Array<[string, number]>;
+
+        console.log("\nSync status:\n");
+        for (const [key, value] of rows) {
+          console.log(`• ${key}: ${style.bold(String(value))}`);
+        }
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("bookmarks")
+  .description("List saved Paprika bookmarks")
+  .option("--json", "Output as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const bookmarks = await client.getBookmarks();
+
+      if (options.json) {
+        console.log(JSON.stringify(bookmarks, null, 2));
+      } else if (bookmarks.length === 0) {
+        console.log("No bookmarks found.");
+      } else {
+        console.log(`\nBookmarks (${bookmarks.length}):\n`);
+        for (const bookmark of bookmarks.sort((a, b) =>
+          a.title.localeCompare(b.title)
+        )) {
+          console.log(`• ${style.bold(bookmark.title)}`);
+          console.log(`  ${style.dim(bookmark.url)}`);
+        }
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
     }
   });
 
@@ -661,6 +734,65 @@ program
     }
   });
 
+program
+  .command("menus")
+  .description("List Paprika menus")
+  .option("--json", "Output as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const menus = await client.getMenus();
+
+      if (options.json) {
+        console.log(JSON.stringify(menus, null, 2));
+      } else if (menus.length === 0) {
+        console.log("No menus found.");
+      } else {
+        console.log(`\nMenus (${menus.length}):\n`);
+        for (const menu of menus.sort((a, b) => a.name.localeCompare(b.name))) {
+          console.log(`• ${style.bold(menu.name)}`);
+          if (menu.notes) {
+            console.log(`  ${style.dim(menu.notes)}`);
+          }
+        }
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("menuitems")
+  .description("List Paprika menu items")
+  .option("--json", "Output as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const menuItems = await client.getMenuItems();
+
+      if (options.json) {
+        console.log(JSON.stringify(menuItems, null, 2));
+      } else if (menuItems.length === 0) {
+        console.log("No menu items found.");
+      } else {
+        console.log(`\nMenu items (${menuItems.length}):\n`);
+        for (const item of menuItems.sort((a, b) => a.order_flag - b.order_flag)) {
+          const recipeSuffix = item.recipe_uid ? style.dim(` [${item.recipe_uid}]`) : "";
+          const menuSuffix = item.menu_uid ? style.dim(` → ${item.menu_uid}`) : "";
+          console.log(`• ${style.bold(item.name)}${recipeSuffix}${menuSuffix}`);
+        }
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
 // ============================================
 // Grocery Commands
 // ============================================
@@ -699,6 +831,48 @@ program
             const qty = item.quantity ? `${item.quantity} ` : "";
             const purchased = item.purchased ? style.dim(" ✓") : "";
             console.log(`  • ${qty}${item.name}${purchased}`);
+          }
+        }
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("pantry")
+  .description("List pantry items")
+  .option("--json", "Output as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const items = await client.getPantry();
+
+      if (options.json) {
+        console.log(JSON.stringify(items, null, 2));
+      } else if (items.length === 0) {
+        console.log("Pantry is empty.");
+      } else {
+        const byAisle = new Map<string, PantryItem[]>();
+        for (const item of items) {
+          const aisle = item.aisle || "Uncategorized";
+          const existing = byAisle.get(aisle) ?? [];
+          existing.push(item);
+          byAisle.set(aisle, existing);
+        }
+
+        console.log(`\nPantry (${items.length} items):\n`);
+        for (const [aisle, aisleItems] of [...byAisle.entries()].sort()) {
+          console.log(`${style.bold(aisle)}:`);
+          for (const item of aisleItems.sort((a, b) =>
+            a.ingredient.localeCompare(b.ingredient)
+          )) {
+            const qty = item.quantity ? ` (${item.quantity})` : "";
+            const stock = item.in_stock === false ? style.dim(" [out of stock]") : "";
+            console.log(`  • ${item.ingredient}${qty}${stock}`);
           }
         }
       }

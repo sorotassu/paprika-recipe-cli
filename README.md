@@ -36,6 +36,9 @@ paprika recipe "Pasta Carbonara"
 paprika import-recipe ./recipe.json --dry-run
 paprika import-recipe ./recipe.json
 
+# Check sync counts
+paprika status
+
 # Check your grocery list
 paprika groceries
 ```
@@ -48,6 +51,16 @@ paprika groceries
 paprika auth              # Interactive login
 paprika logout            # Clear stored credentials
 paprika whoami            # Show current user
+```
+
+### Read-only Utilities
+
+```bash
+paprika status           # Show sync object counts
+paprika status --json
+
+paprika bookmarks        # List saved bookmarks
+paprika bookmarks --json
 ```
 
 ### Recipes
@@ -77,6 +90,12 @@ paprika import-recipe ./recipe.json --allow-duplicate
 paprika meals                   # Show all planned meals
 paprika meals --date 2026-01-08 # Filter by date
 paprika meals --json
+
+paprika menus                   # List menus
+paprika menus --json
+
+paprika menuitems               # List menu items
+paprika menuitems --json
 ```
 
 ### Groceries
@@ -85,6 +104,13 @@ paprika meals --json
 paprika groceries        # Show unpurchased items
 paprika groceries --all  # Include purchased items
 paprika groceries --json
+```
+
+### Pantry
+
+```bash
+paprika pantry          # List pantry items
+paprika pantry --json
 ```
 
 ### Categories
@@ -174,9 +200,14 @@ const client = new PaprikaClient({
   password: process.env.PAPRIKA_PASSWORD,
 });
 
+const status = await client.getStatus();
+const bookmarks = await client.getBookmarks();
 const recipes = await client.getAllRecipes();
 const meals = await client.getMeals();
+const menus = await client.getMenus();
+const menuItems = await client.getMenuItems();
 const groceries = await client.getGroceries();
+const pantry = await client.getPantry();
 const saved = await client.saveRecipe({
   uid: "11111111-1111-1111-1111-111111111111",
   name: "Example Recipe",

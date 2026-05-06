@@ -88,6 +88,7 @@ export interface GroceryItem {
   name: string;
   ingredient: string;
   recipe_uid: string | null;
+  recipe?: string | null;
   aisle: string;
   quantity: string;
   purchased: boolean;
@@ -101,6 +102,42 @@ export interface Category {
   parent_uid: string | null;
 }
 
+export interface Bookmark {
+  uid: string;
+  title: string;
+  url: string;
+  order_flag: number;
+}
+
+export interface PantryItem {
+  uid: string;
+  ingredient: string;
+  aisle: string;
+  quantity?: string | null;
+  expiration_date?: string | null;
+  has_expiration?: boolean;
+  in_stock?: boolean;
+  purchase_date?: string | null;
+  aisle_uid?: string | null;
+  location_uid?: string | null;
+  notes?: string | null;
+}
+
+export interface Menu {
+  uid: string;
+  name: string;
+  notes: string;
+  order_flag: number;
+}
+
+export interface MenuItem {
+  uid: string;
+  name: string;
+  recipe_uid: string | null;
+  menu_uid: string | null;
+  order_flag: number;
+}
+
 export interface SyncStatusResponse {
   recipes: number;
   meals: number;
@@ -110,6 +147,12 @@ export interface SyncStatusResponse {
   menus: number;
   menuitems: number;
   pantry: number;
+  photos?: number;
+  grocerylists?: number;
+  groceryaisles?: number;
+  groceryingredients?: number;
+  mealtypes?: number;
+  pantrylocations?: number;
 }
 
 export interface ApiResponse<T> {

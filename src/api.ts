@@ -12,6 +12,11 @@ import type {
   Meal,
   GroceryItem,
   Category,
+  Bookmark,
+  PantryItem,
+  Menu,
+  MenuItem,
+  SyncStatusResponse,
   ApiResponse,
   RecipeWritePayload,
 } from "./types.js";
@@ -176,6 +181,20 @@ export class PaprikaClient {
   }
 
   /**
+   * Get current sync status counts
+   */
+  async getStatus(): Promise<SyncStatusResponse> {
+    return this.request<SyncStatusResponse>("/sync/status/");
+  }
+
+  /**
+   * Get all bookmarks
+   */
+  async getBookmarks(): Promise<Bookmark[]> {
+    return this.request<Bookmark[]>("/sync/bookmarks/");
+  }
+
+  /**
    * Get all meals
    */
   async getMeals(): Promise<Meal[]> {
@@ -190,10 +209,31 @@ export class PaprikaClient {
   }
 
   /**
+   * Get all pantry items
+   */
+  async getPantry(): Promise<PantryItem[]> {
+    return this.request<PantryItem[]>("/sync/pantry/");
+  }
+
+  /**
    * Get all categories
    */
   async getCategories(): Promise<Category[]> {
     return this.request<Category[]>("/sync/categories/");
+  }
+
+  /**
+   * Get all menus
+   */
+  async getMenus(): Promise<Menu[]> {
+    return this.request<Menu[]>("/sync/menus/");
+  }
+
+  /**
+   * Get all menu items
+   */
+  async getMenuItems(): Promise<MenuItem[]> {
+    return this.request<MenuItem[]>("/sync/menuitems/");
   }
 
   /**

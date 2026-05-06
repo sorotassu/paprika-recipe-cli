@@ -13,7 +13,10 @@ import type {
   Meal,
   MealType,
   MealWritePayload,
+  GroceryAisle,
   GroceryItem,
+  GroceryList,
+  GroceryWritePayload,
   Category,
   Bookmark,
   PantryItem,
@@ -231,10 +234,43 @@ export class PaprikaClient {
   }
 
   /**
+   * Get all grocery lists
+   */
+  async getGroceryLists(): Promise<GroceryList[]> {
+    return this.request<GroceryList[]>("/sync/grocerylists/");
+  }
+
+  /**
+   * Get all grocery aisles
+   */
+  async getGroceryAisles(): Promise<GroceryAisle[]> {
+    return this.request<GroceryAisle[]>("/sync/groceryaisles/");
+  }
+
+  /**
    * Get all grocery items
    */
   async getGroceries(): Promise<GroceryItem[]> {
     return this.request<GroceryItem[]>("/sync/groceries/");
+  }
+
+  /**
+   * Create, update, or delete grocery entries
+   */
+  async saveGroceries(items: GroceryWritePayload[]): Promise<void> {
+    const form = new FormData();
+    form.append(
+      "data",
+      new Blob([gzipSync(Buffer.from(JSON.stringify(items), "utf-8"))], {
+        type: "application/octet-stream",
+      }),
+      "groceries.gz"
+    );
+
+    await this.request<true>("/sync/groceries/", {
+      method: "POST",
+      body: form,
+    });
   }
 
   /**

@@ -124,9 +124,22 @@ paprika menuitems --json
 ### Groceries
 
 ```bash
-paprika groceries        # Show unpurchased items
-paprika groceries --all  # Include purchased items
+paprika groceries                       # Show unpurchased items (includes item UIDs)
+paprika groceries --all                 # Include purchased items
 paprika groceries --json
+
+paprika add-grocery "Red onions"
+paprika add-grocery "Broth" "2 cartons" --aisle "Canned and Jar Goods"
+paprika add-grocery "Garlic" --dry-run --json
+
+paprika update-grocery <grocery-uid> --quantity "3 cloves"
+paprika update-grocery <grocery-uid> --aisle Produce --name "Green onions"
+
+paprika check-grocery <grocery-uid>
+paprika uncheck-grocery <grocery-uid>
+
+paprika remove-grocery <grocery-uid>
+paprika remove-grocery <grocery-uid> --dry-run
 ```
 
 ### Pantry
@@ -234,6 +247,8 @@ const mealTypes = await client.getMealTypes();
 const meals = await client.getMeals();
 const menus = await client.getMenus();
 const menuItems = await client.getMenuItems();
+const groceryLists = await client.getGroceryLists();
+const groceryAisles = await client.getGroceryAisles();
 const groceries = await client.getGroceries();
 const pantry = await client.getPantry();
 await client.saveMeals([
@@ -244,6 +259,25 @@ await client.saveMeals([
     date: "2026-01-08 00:00:00",
     type: 2,
     order_flag: 0,
+    hash: generateSyncHash(),
+    deleted: false,
+  },
+]);
+await client.saveGroceries([
+  {
+    uid: "33333333-3333-3333-3333-333333333333",
+    name: "Broth",
+    ingredient: "Broth",
+    recipe_uid: null,
+    recipe: null,
+    instruction: "",
+    quantity: "2 cartons",
+    purchased: false,
+    order_flag: 0,
+    separate: false,
+    aisle: groceryAisles[0]?.name ?? "",
+    aisle_uid: groceryAisles[0]?.uid ?? null,
+    list_uid: groceryLists[0]!.uid,
     hash: generateSyncHash(),
     deleted: false,
   },

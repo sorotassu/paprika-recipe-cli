@@ -20,6 +20,10 @@ import {
 import type {
   Bookmark,
   Category,
+  GroceryAisle,
+  GroceryItem,
+  GroceryList,
+  GroceryWritePayload,
   Meal,
   MealType,
   MealWritePayload,
@@ -626,6 +630,104 @@ function getNextMealOrderFlag(
       meal.date === date &&
       meal.type === type
   ).length;
+}
+
+async function resolveGroceryAisle(
+  client: PaprikaClient,
+  identifier?: string
+): Promise<GroceryAisle | null> {
+  if (!identifier) {
+    return null;
+  }
+
+  const aisles = await client.getGroceryAisles();
+  const trimmed = identifier.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalizedUid = trimmed.toUpperCase();
+  const byUid = aisles.find((aisle) => aisle.uid.toUpperCase() === normalizedUid);
+  if (byUid) {
+    return byUid;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  const exact = aisles.find((aisle) => aisle.name.trim().toLowerCase() === normalized);
+  if (exact) {
+    return exact;
+  }
+
+  const partialMatches = aisles.filter((aisle) =>
+    aisle.name.trim().toLowerCase().includes(normalized)
+  );
+  if (partialMatches.length > 1) {
+    const names = partialMatches.map((aisle) => aisle.name).join(", ");
+    throw new Error(`Multiple grocery aisles matched "${identifier}": ${names}`);
+  }
+  if (partialMatches.length === 1) {
+    return partialMatches[0]!;
+  }
+
+  throw new Error(`Unknown grocery aisle: ${identifier}`);
+}
+
+async function getDefaultGroceryList(client: PaprikaClient): Promise<GroceryList> {
+  const lists = await client.getGroceryLists();
+  const defaultList = lists.find((list) => list.is_default);
+  if (defaultList) {
+    return defaultList;
+  }
+  if (lists.length === 1) {
+    return lists[0]!;
+  }
+  if (lists.length === 0) {
+    throw new Error("No Paprika grocery lists were found.");
+  }
+  throw new Error("Multiple grocery lists found but no default list is marked.");
+}
+
+function findGroceryByUid(items: GroceryItem[], uid: string): GroceryItem | null {
+  const normalized = uid.trim().toUpperCase();
+  return items.find((item) => item.uid.toUpperCase() === normalized) ?? null;
+}
+
+function getNextGroceryOrderFlag(
+  items: GroceryItem[],
+  listUid: string,
+  skipUid?: string
+): number {
+  return items.filter(
+    (item) => item.uid !== skipUid && item.list_uid === listUid
+  ).reduce((max, item) => Math.max(max, item.order_flag), -1) + 1;
+}
+
+function toGroceryWritePayload(
+  item: GroceryItem,
+  overrides: Partial<GroceryWritePayload> = {}
+): GroceryWritePayload {
+  if (!item.list_uid) {
+    throw new Error(`Grocery item ${item.uid} is missing list_uid.`);
+  }
+
+  return {
+    uid: item.uid,
+    name: item.name,
+    ingredient: item.ingredient,
+    recipe_uid: item.recipe_uid,
+    recipe: item.recipe ?? null,
+    instruction: item.instruction ?? "",
+    quantity: item.quantity,
+    purchased: item.purchased,
+    order_flag: item.order_flag,
+    separate: item.separate ?? false,
+    aisle: item.aisle,
+    aisle_uid: item.aisle_uid ?? null,
+    list_uid: item.list_uid,
+    hash: generateSyncHash(),
+    deleted: false,
+    ...overrides,
+  };
 }
 
 program
@@ -1475,7 +1577,6 @@ program
       } else if (filtered.length === 0) {
         console.log("Grocery list is empty.");
       } else {
-        // Group by aisle
         const byAisle = new Map<string, typeof items>();
         for (const item of filtered) {
           const aisle = item.aisle || "Uncategorized";
@@ -1487,12 +1588,329 @@ program
         console.log(`\nGrocery list (${filtered.length} items):\n`);
         for (const [aisle, aisleItems] of [...byAisle.entries()].sort()) {
           console.log(`${style.bold(aisle)}:`);
-          for (const item of aisleItems) {
+          for (const item of aisleItems.sort((a, b) => a.order_flag - b.order_flag)) {
             const qty = item.quantity ? `${item.quantity} ` : "";
             const purchased = item.purchased ? style.dim(" ✓") : "";
-            console.log(`  • ${qty}${item.name}${purchased}`);
+            console.log(
+              `  • ${qty}${item.name}${purchased} ${style.dim("[" + item.uid + "]")}`
+            );
           }
         }
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("add-grocery")
+  .description("Add a grocery list item")
+  .argument("<name>", "Grocery item name")
+  .argument("[quantity]", "Optional quantity")
+  .option("--aisle <identifier>", "Grocery aisle name or UID")
+  .option("--ingredient <ingredient>", "Ingredient name override")
+  .option("--instruction <instruction>", "Instruction/note text")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      name: string,
+      quantity: string | undefined,
+      options: {
+        aisle?: string;
+        ingredient?: string;
+        instruction?: string;
+        json?: boolean;
+        dryRun?: boolean;
+      }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const [items, list, aisle] = await Promise.all([
+          client.getGroceries(),
+          getDefaultGroceryList(client),
+          resolveGroceryAisle(client, options.aisle),
+        ]);
+
+        const payload: GroceryWritePayload = {
+          uid: randomUUID().toUpperCase(),
+          name: name.trim(),
+          ingredient: options.ingredient?.trim() || name.trim(),
+          recipe_uid: null,
+          recipe: null,
+          instruction: options.instruction?.trim() || "",
+          quantity: quantity?.trim() || "",
+          purchased: false,
+          order_flag: getNextGroceryOrderFlag(items, list.uid),
+          separate: false,
+          aisle: aisle?.name ?? "",
+          aisle_uid: aisle?.uid ?? null,
+          list_uid: list.uid,
+          hash: generateSyncHash(),
+          deleted: false,
+        };
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would add grocery: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveGroceries([payload]);
+        const createdItem = findGroceryByUid(await client.getGroceries(), payload.uid);
+        if (!createdItem) {
+          throw new Error("Grocery item was created but could not be reloaded from Paprika.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(createdItem, null, 2));
+        } else {
+          console.log(`Added grocery: ${style.bold(createdItem.name)} ${style.dim("[" + createdItem.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("update-grocery")
+  .description("Update a grocery list item")
+  .argument("<uid>", "Grocery item UID")
+  .option("--name <name>", "New grocery item name")
+  .option("--quantity <quantity>", "New quantity")
+  .option("--aisle <identifier>", "New aisle name or UID")
+  .option("--ingredient <ingredient>", "New ingredient text")
+  .option("--instruction <instruction>", "New instruction/note text")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      uid: string,
+      options: {
+        name?: string;
+        quantity?: string;
+        aisle?: string;
+        ingredient?: string;
+        instruction?: string;
+        json?: boolean;
+        dryRun?: boolean;
+      }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const items = await client.getGroceries();
+        const existingItem = findGroceryByUid(items, uid);
+        if (!existingItem) {
+          throw new Error(`Grocery item not found: ${uid}`);
+        }
+        if (
+          !options.name &&
+          options.quantity === undefined &&
+          options.aisle === undefined &&
+          options.ingredient === undefined &&
+          options.instruction === undefined
+        ) {
+          throw new Error(
+            "Provide at least one of --name, --quantity, --aisle, --ingredient, or --instruction."
+          );
+        }
+
+        const aisle = options.aisle !== undefined
+          ? await resolveGroceryAisle(client, options.aisle)
+          : null;
+
+        const payload = toGroceryWritePayload(existingItem, {
+          name: options.name?.trim() || existingItem.name,
+          quantity: options.quantity !== undefined ? options.quantity.trim() : existingItem.quantity,
+          ingredient:
+            options.ingredient !== undefined
+              ? options.ingredient.trim()
+              : existingItem.ingredient,
+          instruction:
+            options.instruction !== undefined
+              ? options.instruction.trim()
+              : existingItem.instruction ?? "",
+          aisle: options.aisle !== undefined ? aisle?.name ?? "" : existingItem.aisle,
+          aisle_uid:
+            options.aisle !== undefined
+              ? aisle?.uid ?? null
+              : existingItem.aisle_uid ?? null,
+        });
+
+        if (options.dryRun) {
+          if (options.json) {
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(`Would update grocery: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+          }
+          return;
+        }
+
+        await client.saveGroceries([payload]);
+        const updatedItem = findGroceryByUid(await client.getGroceries(), payload.uid);
+        if (!updatedItem) {
+          throw new Error("Grocery item was updated but could not be reloaded from Paprika.");
+        }
+
+        if (options.json) {
+          console.log(JSON.stringify(updatedItem, null, 2));
+        } else {
+          console.log(`Updated grocery: ${style.bold(updatedItem.name)} ${style.dim("[" + updatedItem.uid + "]")}`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("check-grocery")
+  .description("Mark a grocery item as purchased")
+  .argument("<uid>", "Grocery item UID")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(async (uid: string, options: { json?: boolean; dryRun?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const existingItem = findGroceryByUid(await client.getGroceries(), uid);
+      if (!existingItem) {
+        throw new Error(`Grocery item not found: ${uid}`);
+      }
+      if (existingItem.purchased) {
+        throw new Error(`Grocery item is already purchased: ${uid}`);
+      }
+
+      const payload = toGroceryWritePayload(existingItem, { purchased: true });
+
+      if (options.dryRun) {
+        if (options.json) {
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          console.log(`Would check grocery: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+        }
+        return;
+      }
+
+      await client.saveGroceries([payload]);
+      const checkedItem = findGroceryByUid(await client.getGroceries(), payload.uid);
+      if (!checkedItem) {
+        throw new Error("Grocery item was updated but could not be reloaded from Paprika.");
+      }
+      if (!checkedItem.purchased) {
+        throw new Error("Grocery item did not report purchased=true after update.");
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(checkedItem, null, 2));
+      } else {
+        console.log(`Checked grocery: ${style.bold(checkedItem.name)} ${style.dim("[" + checkedItem.uid + "]")}`);
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("uncheck-grocery")
+  .description("Mark a grocery item as not purchased")
+  .argument("<uid>", "Grocery item UID")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(async (uid: string, options: { json?: boolean; dryRun?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const existingItem = findGroceryByUid(await client.getGroceries(), uid);
+      if (!existingItem) {
+        throw new Error(`Grocery item not found: ${uid}`);
+      }
+      if (!existingItem.purchased) {
+        throw new Error(`Grocery item is already unchecked: ${uid}`);
+      }
+
+      const payload = toGroceryWritePayload(existingItem, { purchased: false });
+
+      if (options.dryRun) {
+        if (options.json) {
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          console.log(`Would uncheck grocery: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+        }
+        return;
+      }
+
+      await client.saveGroceries([payload]);
+      const uncheckedItem = findGroceryByUid(await client.getGroceries(), payload.uid);
+      if (!uncheckedItem) {
+        throw new Error("Grocery item was updated but could not be reloaded from Paprika.");
+      }
+      if (uncheckedItem.purchased) {
+        throw new Error("Grocery item still reports purchased=true after update.");
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(uncheckedItem, null, 2));
+      } else {
+        console.log(`Unchecked grocery: ${style.bold(uncheckedItem.name)} ${style.dim("[" + uncheckedItem.uid + "]")}`);
+      }
+    } catch (error) {
+      printError(error instanceof Error ? error.message : String(error));
+      process.exit(ExitCode.Failure);
+    }
+  });
+
+program
+  .command("remove-grocery")
+  .description("Remove a grocery list item")
+  .argument("<uid>", "Grocery item UID")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(async (uid: string, options: { json?: boolean; dryRun?: boolean }) => {
+    const config = requireConfig();
+    const client = new PaprikaClient(config);
+
+    try {
+      const existingItem = findGroceryByUid(await client.getGroceries(), uid);
+      if (!existingItem) {
+        throw new Error(`Grocery item not found: ${uid}`);
+      }
+
+      const payload = toGroceryWritePayload(existingItem, { deleted: true });
+
+      if (options.dryRun) {
+        if (options.json) {
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          console.log(`Would remove grocery: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
+        }
+        return;
+      }
+
+      await client.saveGroceries([payload]);
+      const deletedItem = findGroceryByUid(await client.getGroceries(), payload.uid);
+      if (deletedItem) {
+        throw new Error("Grocery item still exists after delete request.");
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ removed: true, uid: payload.uid, name: payload.name }, null, 2));
+      } else {
+        console.log(`Removed grocery: ${style.bold(payload.name)} ${style.dim("[" + payload.uid + "]")}`);
       }
     } catch (error) {
       printError(error instanceof Error ? error.message : String(error));

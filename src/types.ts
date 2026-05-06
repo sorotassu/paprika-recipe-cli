@@ -113,10 +113,46 @@ export interface GroceryItem {
   ingredient: string;
   recipe_uid: string | null;
   recipe?: string | null;
-  aisle: string;
+  instruction?: string;
   quantity: string;
   purchased: boolean;
   order_flag: number;
+  separate?: boolean;
+  aisle: string;
+  aisle_uid?: string | null;
+  list_uid?: string | null;
+}
+
+export interface GroceryAisle {
+  uid: string;
+  name: string;
+  order_flag: number;
+}
+
+export interface GroceryList {
+  uid: string;
+  name: string;
+  order_flag: number;
+  is_default: boolean;
+  reminders_list?: string | null;
+}
+
+export interface GroceryWritePayload {
+  uid: string;
+  name: string;
+  ingredient: string;
+  recipe_uid: string | null;
+  recipe: string | null;
+  instruction: string;
+  quantity: string;
+  purchased: boolean;
+  order_flag: number;
+  separate: boolean;
+  aisle: string;
+  aisle_uid: string | null;
+  list_uid: string;
+  hash: string;
+  deleted: boolean;
 }
 
 export interface Category {

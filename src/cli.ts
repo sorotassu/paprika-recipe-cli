@@ -6,6 +6,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { createInterface } from "node:readline";
 import { Command } from "commander";
 import { generateSyncHash, PaprikaClient } from "./index.js";
@@ -1032,7 +1033,7 @@ function normalizeImportedRecipe(
         ? input.source_url
         : existingRecipe?.source_url ?? "",
     image_url:
-      typeof input.image_url === "string"
+      typeof input.image_url === "string" || input.image_url === null
         ? input.image_url
         : existingRecipe?.image_url ?? null,
     photo:
@@ -1146,6 +1147,44 @@ function readSingleImportedRecipe(path: string): ImportedRecipeInput {
   }
 
   return parsed;
+}
+
+function buildPhotoUploadRecipe(
+  existingRecipe: Recipe,
+  photoPath: string
+): RecipeWritePayload {
+  return normalizeImportedRecipe(
+    {
+      photo: basename(photoPath),
+      photo_large: "",
+      photo_hash: "",
+      image_url: null,
+    },
+    {
+      categoryMap: new Map<string, string>(),
+      existingRecipe,
+    }
+  );
+}
+
+async function confirmPermanentDelete(
+  recipe: Recipe,
+  options: { yes?: boolean }
+): Promise<void> {
+  if (options.yes) {
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    throw new Error("Permanent delete requires --yes in non-interactive mode.");
+  }
+
+  const response = await prompt(
+    `Type DELETE to permanently remove \"${recipe.name}\": `
+  );
+  if (response.trim() !== "DELETE") {
+    throw new Error("Permanent delete cancelled.");
+  }
 }
 
 function normalizeMealDate(input: string): string {
@@ -1800,6 +1839,134 @@ program
       process.exit(ExitCode.Failure);
     }
   });
+
+program
+  .command("delete-recipe")
+  .description("Permanently delete a recipe from Paprika")
+  .argument("<identifier>", "Recipe UID or name")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .option("--yes", "Skip the interactive confirmation prompt")
+  .option(
+    "--force",
+    "Allow permanent delete even if the recipe is not already in trash"
+  )
+  .action(
+    async (
+      identifier: string,
+      options: { json?: boolean; dryRun?: boolean; yes?: boolean; force?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const existingRecipe = await resolveRecipeIdentifier(client, identifier, {
+          includeTrash: true,
+        });
+        if (!existingRecipe) {
+          throw new Error(`Recipe not found: ${identifier}`);
+        }
+        if (!existingRecipe.in_trash && !options.force) {
+          throw new Error(
+            `Recipe is not in trash: ${existingRecipe.name}. Trash it first or pass --force.`
+          );
+        }
+
+        const recipe = normalizeImportedRecipe(
+          { deleted: true },
+          {
+            categoryMap: buildCategoryMap(await client.getCategories()),
+            existingRecipe,
+          }
+        );
+
+        if (options.dryRun) {
+          const result = { action: "delete", uid: recipe.uid, name: recipe.name, deleted: true };
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2));
+          } else {
+            console.log(`Would permanently delete recipe: ${style.bold(recipe.name)} (${recipe.uid})`);
+          }
+          return;
+        }
+
+        await confirmPermanentDelete(existingRecipe, options);
+        await client.deleteRecipe(recipe);
+
+        if (options.json) {
+          console.log(JSON.stringify({ removed: true, uid: recipe.uid, name: recipe.name }, null, 2));
+        } else {
+          console.log(`Deleted recipe: ${style.bold(recipe.name)} (${recipe.uid})`);
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
+
+program
+  .command("set-recipe-photo")
+  .description("Upload or replace a local photo for a recipe")
+  .argument("<identifier>", "Recipe UID or name")
+  .argument("<path>", "Path to a local image file")
+  .option("--json", "Output as JSON")
+  .option("--dry-run", "Show the change without writing to Paprika")
+  .action(
+    async (
+      identifier: string,
+      path: string,
+      options: { json?: boolean; dryRun?: boolean }
+    ) => {
+      const config = requireConfig();
+      const client = new PaprikaClient(config);
+
+      try {
+        const existingRecipe = await resolveRecipeIdentifier(client, identifier, {
+          includeTrash: true,
+        });
+        if (!existingRecipe) {
+          throw new Error(`Recipe not found: ${identifier}`);
+        }
+        if (existingRecipe.in_trash) {
+          throw new Error(`Recipe is in trash: ${existingRecipe.name}`);
+        }
+
+        const recipe = buildPhotoUploadRecipe(existingRecipe, path);
+
+        if (options.dryRun) {
+          const result = {
+            action: "set-photo",
+            uid: recipe.uid,
+            name: recipe.name,
+            photo: recipe.photo,
+            photo_large: recipe.photo_large,
+            photo_hash: recipe.photo_hash,
+            image_url: recipe.image_url,
+          };
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2));
+          } else {
+            console.log(`Would set recipe photo: ${style.bold(recipe.name)} (${recipe.uid}) -> ${style.dim(recipe.photo)}`);
+          }
+          return;
+        }
+
+        const saved = await client.saveRecipeWithPhoto(recipe, path);
+        if (options.json) {
+          console.log(JSON.stringify(saved, null, 2));
+        } else {
+          console.log(`Updated recipe photo: ${style.bold(saved.name)} (${saved.uid})`);
+          if (saved.photo_url) {
+            console.log(style.dim(saved.photo_url));
+          }
+        }
+      } catch (error) {
+        printError(error instanceof Error ? error.message : String(error));
+        process.exit(ExitCode.Failure);
+      }
+    }
+  );
 
 program
   .command("favorite-recipe")

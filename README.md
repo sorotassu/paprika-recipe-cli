@@ -111,6 +111,13 @@ paprika pin-recipe "Pasta Carbonara" --remove
 
 paprika trash-recipe "Pasta Carbonara" --dry-run
 paprika restore-recipe "Pasta Carbonara" --dry-run
+
+paprika delete-recipe "Pasta Carbonara" --dry-run
+paprika delete-recipe <uid> --yes                # Permanently remove (irreversible)
+paprika delete-recipe <uid> --yes --force        # Allow delete even if not already trashed
+
+paprika set-recipe-photo "Pasta Carbonara" ./photo.jpg
+paprika set-recipe-photo <uid> ./photo.jpg --dry-run --json
 ```
 
 ### Meal Planning
@@ -233,7 +240,9 @@ Recipe imports accept a single recipe object or an array of recipe objects. Cate
 
 `update-recipe` expects a single recipe object and preserves the target recipe UID while applying fields from the JSON file.
 
-`trash-recipe` and `restore-recipe` are the supported deletion lifecycle. Permanent deletion and fresh local photo upload are intentionally not implemented yet because the Paprika API behavior for those paths is not verified.
+`trash-recipe` and `restore-recipe` remain the reversible deletion lifecycle. `delete-recipe` is the irreversible path and requires confirmation (`--yes` or interactive `DELETE` prompt). By default it only works on recipes already in trash; pass `--force` to bypass that guard.
+
+`set-recipe-photo` uploads or replaces a local image by attaching a `photo_upload` file part to the recipe write request. It clears `image_url` and stores the uploaded file under the filename you provide.
 
 ### Get ingredients for a recipe
 
@@ -359,6 +368,12 @@ const saved = await client.saveRecipe({
   on_favorites: false,
   created: "2026-01-01 00:00:00",
   deleted: false,
+});
+await client.saveRecipeWithPhoto(saved, "./photo.jpg");
+await client.deleteRecipe({
+  ...saved,
+  deleted: true,
+  hash: generateSyncHash(),
 });
 ```
 

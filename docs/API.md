@@ -32,13 +32,16 @@ These return predictable shapes and are exercised by built-in CLI commands.
 
 ## Verified write endpoints
 
-All writes go through `PaprikaClient.saveEntities()`, which encodes a
-gzip-compressed JSON array in a `multipart/form-data` `data` field. Each
-payload uses a fresh `hash` and `deleted` flag for soft-delete semantics.
+List-style writes go through `PaprikaClient.saveEntities()`, which encodes a
+gzip-compressed JSON array in a `multipart/form-data` `data` field. Recipe
+writes use the same gzip multipart transport at `/sync/recipe/<uid>/`, with an
+optional `photo_upload` file part for local photo replacement.
 
 | Endpoint               | CLI helpers                                                         | Validation                                                                          |
 | ---------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `/sync/recipe/<uid>/`  | `import-recipe`, `import-url`, `update-recipe`, lifecycle helpers   | Live import + readback + trash on disposable test recipes.                          |
+| `/sync/recipe/<uid>/`  | `import-recipe`, `import-url`, `update-recipe`, `trash-recipe`, `restore-recipe`, `favorite-recipe`, `pin-recipe` | Live import + readback + reversible lifecycle updates on disposable test recipes.   |
+| `/sync/recipe/<uid>/`  | `delete-recipe`                                                     | Live disposable recipe posted with `deleted: true` vanished from `/sync/recipes/` and later `GET /sync/recipe/<uid>/` returned `Recipe not found.` |
+| `/sync/recipe/<uid>/`  | `set-recipe-photo`                                                  | Live upload + replacement verified with `photo_upload` file part and recipe JSON carrying `photo=<filename>`, `photo_large=""`, `photo_hash=""`, `image_url=null`. |
 | `/sync/categories/`    | `create-category`, `rename-category`, `delete-category`             | Live create → re-parent → child + parent delete cycle.                              |
 | `/sync/bookmarks/`     | `add-bookmark`, `update-bookmark`, `remove-bookmark`                | Live add → re-read → update by title → delete cycle.                                |
 | `/sync/meals/`         | `add-meal`, `update-meal`, `remove-meal`                            | Live add → re-read → update date/type/recipe → delete cycle.                        |
@@ -51,19 +54,18 @@ verified against live data.
 
 | Area                            | Status                                                                                                                                                          |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Permanent recipe delete         | Not exposed. Live `deleted: true` semantics on `/sync/recipe/<uid>/` not yet validated; trash/restore is the supported deletion path. Tracked in issue #9.      |
-| Fresh local recipe photo upload | Not exposed. `clone_recipe()` evidence in third-party clients shows multipart `photo_upload` part; CLI cannot yet generate that payload safely. Tracked in #9.  |
 | `/bookmarklet/v1/recipe/` scrape | Intentionally not used. Requires browser-rendered `styles` payload (computed CSS + DOM geometry). `import-url` parses pages directly via schema.org JSON-LD instead. |
 | Pantry writes                   | Not implemented. Endpoint shape is read-only here; write payload not yet probed.                                                                                |
 | Menu and menu item writes       | Not implemented. `POST /sync/menuitems/` rejected meal-shaped payloads in early probes; correct write shape unverified.                                         |
 
 ## Sync request shape
 
-Verified writes use this shape (handled internally by
-`PaprikaClient.saveEntities`):
+Verified writes use this shape:
 
 - `Content-Type: multipart/form-data`
-- form field `data`: `gzip(JSON.stringify(items))` as `application/octet-stream`
+- form field `data`: `gzip(JSON.stringify(payload))` as `application/octet-stream`
+- list endpoints (`/sync/bookmarks/`, `/sync/meals/`, `/sync/groceries/`, `/sync/categories/`) send JSON arrays and are handled by `PaprikaClient.saveEntities()`
+- recipe endpoint (`/sync/recipe/<uid>/`) sends a single JSON object; local photo updates add `photo_upload` as a second multipart file part
 - response: `{ "result": true }` on success, `{ "error": { code, message } }` on failure
 
 Read responses come back gzip-compressed JSON in the form

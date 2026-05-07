@@ -4,6 +4,8 @@
  * REST client for Paprika Recipe Manager cloud sync API.
  */
 
+import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type {
   PaprikaConfig,
@@ -315,9 +317,12 @@ export class PaprikaClient {
   }
 
   /**
-   * Create or update a recipe by UID
+   * Write a recipe payload with optional photo upload.
    */
-  async saveRecipe(recipe: RecipeWritePayload): Promise<Recipe> {
+  private async writeRecipe(
+    recipe: RecipeWritePayload,
+    options: { photoPath?: string } = {}
+  ): Promise<void> {
     const form = new FormData();
     form.append(
       "data",
@@ -327,12 +332,46 @@ export class PaprikaClient {
       "recipe.gz"
     );
 
+    if (options.photoPath) {
+      const filename = basename(options.photoPath);
+      const content = readFileSync(options.photoPath);
+      form.append(
+        "photo_upload",
+        new Blob([content], { type: "application/octet-stream" }),
+        filename
+      );
+    }
+
     await this.request<true>(`/sync/recipe/${recipe.uid}/`, {
       method: "POST",
       body: form,
     });
+  }
 
+  /**
+   * Create or update a recipe by UID
+   */
+  async saveRecipe(recipe: RecipeWritePayload): Promise<Recipe> {
+    await this.writeRecipe(recipe);
     return this.getRecipe(recipe.uid);
+  }
+
+  /**
+   * Create or update a recipe and upload a local photo file.
+   */
+  async saveRecipeWithPhoto(
+    recipe: RecipeWritePayload,
+    photoPath: string
+  ): Promise<Recipe> {
+    await this.writeRecipe(recipe, { photoPath });
+    return this.getRecipe(recipe.uid);
+  }
+
+  /**
+   * Permanently delete a recipe by UID.
+   */
+  async deleteRecipe(recipe: RecipeWritePayload): Promise<void> {
+    await this.writeRecipe({ ...recipe, deleted: true });
   }
 
   /**

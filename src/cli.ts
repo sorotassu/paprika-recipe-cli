@@ -41,7 +41,7 @@ import { ExitCode } from "./types.js";
 import { setNoColor, printError, printSuccess, style } from "./output.js";
 import { createResolver, toWritePayload } from "./shared.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const program = new Command();
 
